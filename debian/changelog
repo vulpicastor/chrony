@@ -1,3 +1,10 @@
+chrony (1.26-4) unstable; urgency=low
+
+  * QA upload.
+  * Depend on net-tools, for netstat (closes: #707260).
+
+ -- Colin Watson <cjwatson@debian.org>  Mon, 08 Jul 2013 18:00:45 +0100
+
 chrony (1.26-3) unstable; urgency=low
 
   * Orphaned.

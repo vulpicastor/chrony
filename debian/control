@@ -8,7 +8,7 @@ Homepage: http://chrony.tuxfamily.org
 
 Package: chrony
 Architecture: linux-any
-Depends: ${misc:Depends}, ${shlibs:Depends}, ucf, timelimit, dpkg (>=1.15.4) | install-info
+Depends: ${misc:Depends}, ${shlibs:Depends}, ucf, timelimit, dpkg (>=1.15.4) | install-info, net-tools
 Recommends: udev (>= 0.124-1)
 Conflicts: ntp, ntp-simple, ntp-refclock, time-daemon
 Provides: time-daemon
