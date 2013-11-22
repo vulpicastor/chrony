@@ -1,0 +1,256 @@
+This is the README for chrony.
+
+What is chrony?
+===============
+Chrony is a pair of programs for maintaining the accuracy of computer
+clocks.
+
+chronyd is a (background) daemon program that can be started at boot
+time.  This does most of the work.
+
+chronyc is a command-line interface program which can be used to
+monitor chronyd's performance and to change various operating
+parateters whilst it is running.
+
+chronyd's main function is to obtain measurements of the true (UTC)
+time from one of several sources, and correct the system clock
+accordingly.  It also works out the rate at which the system clock
+gains or loses time and uses this information to keep it accurate
+between measurements from the reference.
+
+The reference time can be derived from Network Time Protocol (NTP)
+servers, reference clocks, or wristwatch-and-keyboard (via chronyc).
+The main source of information about the Network Time Protocol is
+http://www.eecis.udel.edu/~ntp.
+
+It is designed so that it can work on computers which only have
+intermittent access to reference sources, for example computers which
+use a dial-up account to access the Internet.  Of course, it will work
+on computers with permanent connections too.
+
+In addition, on Linux it can monitor the system's real time clock
+performance, so the system can maintain accurate time even across
+reboots.
+
+Typical accuracies available between 2 machines are
+
+On an ethernet LAN : 100-200 microseconds, often much better
+On a V32bis dial-up modem connection : 10's of milliseconds (from one
+session to the next)
+
+With a good reference clock the accuracy can reach one microsecond.
+
+chronyd can also operate as an RFC1305-compatible NTP server and peer.
+
+
+What will chrony run on?
+========================
+
+Chrony can be successfully built and run on
+
+1. Linux v1.2.13, v2.0.x, 2.1.x (partially), 2.2.x, 2.3.x, 2.4.x, 2.6.x.
+Real time clock support is limited to 2.0.32 onwards and to 2.2, 2.3,
+2.4 and 2.6 series only.  i386, x86_64, PowerPC are known to be
+supported.
+
+2. Solaris 2.5/2.5.1/2.6/2.7/2.8 (various platforms) 
+
+3. SunOS 4.1.4 (Sparc 2 and Sparc 20)
+
+4. BSD/386 v1.1 has been reported to work using the SunOS 4.1 driver.
+
+5. NetBSD.
+
+Any other system will require a porting exercise.  You would need to
+start from one of the existing system-specific drivers and look into
+the quirks of certain system calls and the kernel on your target
+system.  (This is described in the manual).
+
+How do I set it up?
+===================
+
+The file INSTALL gives instructions.  On supported systems the
+compilation process should be automatic.
+
+You will need an ANSI C compiler -- gcc is recommended.
+
+The manual (in texinfo and text formats) describes how to set the
+software up for the less straightforward cases.
+
+What documentation is there?
+============================
+
+A manual is supplied in Texinfo format (chrony.texi) and
+ready-formatted plain text (chrony.txt) in the distribution.
+
+There is also information available on the chrony web pages, accessible
+through the URL 
+
+    http://chrony.tuxfamily.org/
+
+What can chrony not do?
+=======================
+
+Compared to the `reference' RFC1305 implementation xntpd, chronyd does
+not support broadcast modes.
+
+Where are new versions announced?
+=================================
+
+There is a low volume mailing list where new versions and other
+important news relating to chrony is announced.  You can join this list
+by sending mail with the subject "subscribe" to
+
+chrony-announce-request@chrony.tuxfamily.org
+
+These messages will be copied to chrony-users (see below).  New versions
+are announced also on Freshmeat (http://freshmeat.net/).
+
+How can I get support for chrony?
+and where can I discuss new features, possible bugs etc?
+========================================================
+
+There are 3 mailing lists relating to chrony.  chrony-announce was
+mentioned above.  chrony-users is a users' discussion list, e.g. for
+general questions and answers about using chrony.  chrony-dev is a more
+technical list, e.g. for discussing how new features should be
+implemented, exchange of information between developers etc.  To
+subscribe to either of these lists, send a message with the subject
+"subscribe" to
+
+chrony-users-request@chrony.tuxfamily.org
+or
+chrony-dev-request@chrony.tuxfamily.org
+
+as applicable.
+
+
+Author
+======
+
+Richard P. Curnow <rc@rc0.org.uk>
+
+
+Maintainers
+===========
+
+John Hasler <john@dhh.gt.org>
+Miroslav Lichvar <mlichvar@redhat.com>
+
+
+Acknowledgements
+================
+
+The following people have provided patches and other major contributions
+to the program :
+
+Benny Lyne Amorsen <benny@amorsen.dk>
+    Patch to add minstratum option
+
+Andrew Bishop <amb@gedanken.demon.co.uk>
+    Fixes for bugs in logging when in daemon mode
+    Fixes for compiler warnings
+    Robustness improvements for drift file
+    Improve installation (directory checking etc)
+    Entries in contrib directory
+    Improvements to 'sources' and 'sourcestats' output from chronyc
+    Improvements to documentation
+    Investigation of required dosynctodr behaviour for various Solaris
+      versions.
+
+Stephan I. Boettcher <stephan@nevis1.columbia.edu>
+    Entries in contrib directory
+
+Erik Bryer <ebryer@spots.ab.ca>
+    Entries in contrib directory
+
+Juliusz Chroboczek <jch@pps.jussieu.fr>
+    Fix install rule in Makefile if chronyd file is in use.
+
+Paul Elliott <pelliott@io.com>
+    DNSchrony (in contrib directory), a tool for handling NTP servers
+    with variable IP addresses.
+
+Mike Fleetwood <mike@rockover.demon.co.uk>
+    Fixes for compiler warnings
+
+Alexander Gretencord <arutha@gmx.de>
+    Changes to installation directory system to make it easier for
+    package builders.
+
+Walter Haidinger <walter.haidinger@gmx.at>
+    Providing me with login access to a Linux installation where v1.12
+    wouldn't compile, so I could develop the fixes for v1.13.  Also, for
+    providing the disc space so I can keep an independent backup of the
+    sources.
+
+Juergen Hannken-Illjes <hannken@eis.cs.tu-bs.de>
+    Port to NetBSD
+
+John Hasler <john@dhh.gt.org>
+    Changes to support 64 bit machines (i.e. those where
+      sizeof(unsigned long) > 4)
+    Bug fix to initstepslew directive
+    Fix to remove potential buffer overrun errors.
+    Memory locking and real-time scheduler support
+    Fix fault where chronyd enters an endless loop
+
+Liam Hatton <me@liamhatton.com>
+    Advice on configuring for Linux on PPC
+
+Jachym Holecek <jakym@volny.cz>
+    Patch to make Linux real time clock work with devfs
+
+Håkan Johansson <f96hajo@chalmers.se>
+    Patch to avoid large values in sources and sourcestats output
+
+Jim Knoble <jmknoble@pobox.com>
+    Fixes for compiler warnings
+
+Antti Jrvinen <costello@iki.fi>
+    Advice on configuring for BSD/386
+
+Miroslav Lichvar <mlichvar@redhat.com>
+    Reference clock support
+    IPv6 support
+    Linux capabilities support
+    Leap second support
+    Improved source selection
+    Improved sample history trimming
+    Improved polling interval adjustment
+    Improved stability with temporary asymmetric delays
+    Temperature compensation
+    Many other bug fixes and improvements
+
+Victor Moroz <vim@prv.adlum.ru>
+    Patch to support Linux with HZ!=100
+
+Kalle Olavi Niemitalo  <tosi@stekt.oulu.fi>
+    acquisitionport support
+
+Frank Otto <sandwichmacher@web.de>
+    Handling arbitrary HZ values
+
+Andreas Piesk <apiesk@virbus.de>
+    Patch to make chronyc use the readline library if available
+
+Timo Teras <timo.teras@iki.fi>
+    Patch to reply correctly on multihomed hosts
+
+Wolfgang Weisselberg <weissel@netcologne.de>
+    Entries in contrib directory
+
+Ralf Wildenhues <Ralf.Wildenhues@gmx.de>
+    Many robustness and security improvements
+    
+Ulrich Windl <ulrich.windl@rz.uni-regensburg.de> for the
+    Providing me with information about the Linux 2.2 kernel
+    functionality compared to 2.0.
+
+Doug Woodward <dougw@whistler.com>
+    Advice on configuring for Solaris 2.8 on x86
+
+Many other people have contributed bug reports and suggestions.  I'm
+sorry I can't identify all of you individually.
+
+vim:tw=72
