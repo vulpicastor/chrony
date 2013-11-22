@@ -1,0 +1,44 @@
+chrony for DEBIAN
+----------------------
+
+ I made the following changes to the chrony distribution to package it for
+ Debian:
+
+ Added /etc/chrony and moved the config files there from /etc.  This the
+ only change to the source code.
+ 
+ Added a few lines to the info files explaining how the Debian installation
+ differs from the standard one.  I also used texi2html to generate html
+ docs.
+
+ Created default /etc/chrony/chrony.conf, /etc/chrony/chrony.keys,
+ /etc/init.d/chrony, /etc/ppp/ip-up.d/chrony, /etc/cron.weekly/chrony, and
+ /etc/ppp/ip-down.d/chrony files and arranged for them to be installed
+ automatically.
+
+ Arranged for a random password to be generated at installation time and
+ installed in chrony.keys as key 1 (unless chrony.keys already has
+ something in it).  You may change this password if you wish.
+
+ The standard Debian chrony installation is designed for systems with an
+ intermittent dial-up connection.  If you have such a system the most you
+ should need to do is edit /etc/chrony/chrony.conf a bit.  If you do not
+ you should read the documentation and create an appropriate configuration
+ (you should read the documentation anyway).
+
+ The scripts /etc/ppp/ip-up.d/chrony, /etc/ppp/ip-down.d/chrony, and
+ /etc/cron.weekly/chrony read key 1 from /etc/chrony/chrony.keys and use it
+ as the password to send chronyc commands.  Thus you can change the
+ password by changing this key, but if you make the command key anything
+ but 1 these scripts won't work without editing.
+
+ As installed, chronyd will be started on bootup and will attempt to
+ contact the default server whenever you connect to your ISP.
+
+ Use 'info chrony' to read the complete documentation. 
+
+
+ John Hasler <john@dhh.gt.org>, 5 Oct 2003
+
+
+ -- John Hasler <john@dhh.gt.org>, Sun Oct  9 12:57:57 2005

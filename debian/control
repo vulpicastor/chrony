@@ -1,0 +1,27 @@
+Source: chrony
+Section: admin
+Priority: extra
+Maintainer: John G. Hasler <jhasler@debian.org>
+Standards-Version: 3.9.2
+Build-Depends: debhelper (>= 8), libedit-dev, texinfo, bison
+Homepage: http://chrony.tuxfamily.org
+
+Package: chrony
+Architecture: linux-any
+Depends: ${misc:Depends}, ${shlibs:Depends}, ucf, timelimit, dpkg (>=1.15.4) | install-info
+Recommends: udev (>= 0.124-1)
+Conflicts: ntp, ntp-simple, ntp-refclock, time-daemon
+Provides: time-daemon
+Replaces: time-daemon
+Description: Sets your computer's clock from time servers on the Net
+ It consists of a pair of programs :
+ `chronyd'.  This is a daemon which runs in background on the system.  It
+ obtains measurements (e.g. via the network) of the system's offset
+ relative to other systems, and adjusts the system time accordingly.  For
+ isolated systems, the user can periodically enter the correct time by hand
+ (using `chronyc').  In either case, `chronyd' determines the rate at which
+ the computer gains or loses time, and compensates for this.  Chronyd
+ implements the NTP protocol and can act as either a client or a server.
+ `chronyc'.  This is a command-line driven control and monitoring program.
+ An administrator can use this to fine-tune various parameters within the
+ daemon, add or delete servers etc whilst the daemon is running.

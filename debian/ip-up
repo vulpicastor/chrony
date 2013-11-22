@@ -1,0 +1,17 @@
+#!/bin/sh
+# This script tells chronyd that the connection is up so that it can
+# contact the server.  John Hasler <jhasler@debian.org> 1998-2003
+# Any possessor of a copy of this program may treat it as if it
+# were in the public domain.  I waive all rights.
+
+/bin/pidof chronyd > /dev/null || exit 0
+KEY=$(awk '$1 ~ /^commandkey$/ { print $2; exit}' /etc/chrony/chrony.conf)
+PASSWORD=`awk '$1 ~ /^'$KEY'$/ {print $2; exit}' /etc/chrony/chrony.keys`
+/usr/bin/chronyc << EOF
+password $PASSWORD
+online
+burst 5/10
+quit
+EOF
+touch /var/run/chrony-ppp-up
+exit 0
