@@ -32,7 +32,7 @@
 #include "addressing.h"
 
 /* Function to initialise the module. */
-extern void NIO_Initialise(void);
+extern void NIO_Initialise(int family);
 
 /* Function to finalise the module */
 extern void NIO_Finalise(void);
@@ -41,7 +41,7 @@ extern void NIO_Finalise(void);
 extern void NIO_SendNormalPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr);
 
 /* Function to transmit an authenticated packet */
-extern void NIO_SendAuthenticatedPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr);
+extern void NIO_SendAuthenticatedPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr, int auth_len);
 
 /* Function to send a datagram to a remote machine's UDP echo port. */
 extern void NIO_SendEcho(NTP_Remote_Address *remote_addr);

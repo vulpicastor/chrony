@@ -54,14 +54,14 @@ extern NSR_Status NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type
    until it succeeds or fails with a non-temporary error. */
 extern void NSR_AddUnresolvedSource(char *name, int port, NTP_Source_Type type, SourceParameters *params);
 
+/* Procedure to try resolve unresolved sources immediately. */
+extern void NSR_ResolveSources(void);
+
 /* Procedure to remove a source */
 extern NSR_Status NSR_RemoveSource(NTP_Remote_Address *remote_addr);
 
 /* This routine is called by ntp_io when a new packet arrives off the network */
-extern void NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr);
-
-/* This routine is called by ntp_io when a new packet with an authentication tail arrives off the network */
-extern void NSR_ProcessAuthenticatedReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr);
+extern void NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, int length);
 
 /* Initialisation function */
 extern void NSR_Initialise(void);

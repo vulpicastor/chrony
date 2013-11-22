@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011-2013
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -44,6 +44,7 @@
 #include "reports.h"
 #include "nameserv.h"
 #include "mkdirpp.h"
+#include "sched.h"
 
 /* ================================================== */
 /* Flag indicating that we are initialised */
@@ -55,10 +56,7 @@ struct SelectInfo {
   int stratum;
   int select_ok;
   double variance;
-  double root_delay;
-  double root_dispersion; 
   double root_distance;
-  double best_offset;
   double lo_limit;
   double hi_limit;
 };
@@ -94,6 +92,12 @@ struct SRC_Instance_Record {
 
   /* Reachability register */
   int reachability;
+
+  /* Flag indicating that only few samples were accumulated so far */
+  int beginning;
+
+  /* Updates left before allowing combining */
+  int outlier;
 
   /* Flag indicating the status of the source */
   SRC_Status status;
@@ -137,8 +141,12 @@ static int selected_source_index; /* Which source index is currently
 /* Score needed to replace the currently selected source */
 #define SCORE_LIMIT 10.0
 
+/* Number of updates needed to reset the outlier status */
+#define OUTLIER_PENALTY 32
+
 static double reselect_distance;
 static double stratum_weight;
+static double combine_limit;
 
 /* ================================================== */
 /* Forward prototype */
@@ -161,12 +169,11 @@ void SRC_Initialise(void) {
   selected_source_index = INVALID_SOURCE;
   reselect_distance = CNF_GetReselectDistance();
   stratum_weight = CNF_GetStratumWeight();
+  combine_limit = CNF_GetCombineLimit();
   initialised = 1;
 
   LCL_AddParameterChangeHandler(slew_sources, NULL);
   LCL_AddDispersionNotifyHandler(add_dispersion, NULL);
-
-  return;
 }
 
 /* ================================================== */
@@ -176,7 +183,6 @@ void SRC_Finalise(void)
   LCL_RemoveParameterChangeHandler(slew_sources, NULL);
   LCL_RemoveDispersionNotifyHandler(add_dispersion, NULL);
   initialised = 0;
-  return;
 }
 
 /* ================================================== */
@@ -213,6 +219,8 @@ SRC_Instance SRC_CreateNewInstance(uint32_t ref_id, SRC_Type type, SRC_SelectOpt
   result->ip_addr = addr;
   result->selectable = 0;
   result->reachability = 0;
+  result->beginning = 1;
+  result->outlier = 0;
   result->status = SRC_BAD_STATS;
   result->type = type;
   result->sel_score = 1.0;
@@ -268,7 +276,6 @@ void SRC_GetFrequencyRange(SRC_Instance instance, double *lo, double *hi)
   assert(initialised);
 
   SST_GetFrequencyRange(instance->stats, lo, hi);
-  return;
 }
 
 /* ================================================== */
@@ -311,8 +318,6 @@ void SRC_AccumulateSample
   SST_DoNewRegression(inst->stats);
   /* And redo clock selection */
   SRC_SelectSource(inst->ref_id);
-
-  return;
 }
 
 /* ================================================== */
@@ -358,6 +363,10 @@ SRC_UpdateReachability(SRC_Instance inst, int reachable)
   inst->reachability <<= 1;
   inst->reachability |= !!reachable;
   inst->reachability &= ~(-1 << REACH_BITS);
+
+  /* The beginning is over when the first sample is at the end of the register */
+  if (inst->reachability & (1 << (REACH_BITS - 1)))
+      inst->beginning = 0;
 
   if (!reachable && inst->index == selected_source_index) {
     /* Try to select a better source */
@@ -416,6 +425,85 @@ source_to_string(SRC_Instance inst)
 }
 
 /* ================================================== */
+
+static int
+combine_sources(int n_sel_sources, struct timeval *ref_time, double *offset,
+                double *offset_sd, double *frequency, double *skew)
+{
+  struct timeval src_ref_time;
+  double src_offset, src_offset_sd, src_frequency, src_skew;
+  double src_root_delay, src_root_dispersion, elapsed;
+  double offset_weight, sum_offset_weight, sum_offset, sum2_offset_sd;
+  double frequency_weight, sum_frequency_weight, sum_frequency, inv_sum2_skew;
+  int i, index, combined;
+
+  if (n_sel_sources == 1)
+    return 1;
+
+  sum_offset_weight = sum_offset = sum2_offset_sd = 0.0;
+  sum_frequency_weight = sum_frequency = inv_sum2_skew = 0.0;
+
+  for (i = combined = 0; i < n_sel_sources; i++) {
+    index = sel_sources[i];
+    SST_GetTrackingData(sources[index]->stats, &src_ref_time,
+                        &src_offset, &src_offset_sd,
+                        &src_frequency, &src_skew,
+                        &src_root_delay, &src_root_dispersion);
+
+    /* Don't include this source if its distance is longer than the distance of
+       the selected source multiplied by the limit, their estimated frequencies
+       are not close, or it was recently marked as outlier */
+
+    if (index != selected_source_index &&
+        (sources[index]->sel_info.root_distance > combine_limit *
+           (reselect_distance + sources[selected_source_index]->sel_info.root_distance) ||
+         fabs(*frequency - src_frequency) >
+           combine_limit * (*skew + src_skew + LCL_GetMaxClockError()))) {
+      sources[index]->outlier = !sources[index]->beginning ? OUTLIER_PENALTY : 1;
+    } else if (sources[index]->outlier) {
+      sources[index]->outlier--;
+    }
+
+    if (sources[index]->outlier)
+      continue;
+
+    UTI_DiffTimevalsToDouble(&elapsed, ref_time, &src_ref_time);
+    src_offset += elapsed * src_frequency;
+    offset_weight = 1.0 / sources[index]->sel_info.root_distance;
+    frequency_weight = 1.0 / src_skew;
+
+#ifdef TRACEON
+    LOG(LOGS_INFO, LOGF_Sources, "combining index=%d oweight=%e offset=%e sd=%e fweight=%e freq=%e skew=%e",
+        index, offset_weight, src_offset, src_offset_sd, frequency_weight, src_frequency, src_skew);
+#endif
+
+    sum_offset_weight += offset_weight;
+    sum_offset += offset_weight * src_offset;
+    sum2_offset_sd += offset_weight * (src_offset_sd * src_offset_sd +
+        (src_offset - *offset) * (src_offset - *offset));
+
+    sum_frequency_weight += frequency_weight;
+    sum_frequency += frequency_weight * src_frequency;
+    inv_sum2_skew += 1.0 / (src_skew * src_skew);
+
+    combined++;
+  }
+
+  assert(combined);
+  *offset = sum_offset / sum_offset_weight;
+  *offset_sd = sqrt(sum2_offset_sd / sum_offset_weight);
+  *frequency = sum_frequency / sum_frequency_weight;
+  *skew = 1.0 / sqrt(inv_sum2_skew);
+
+#ifdef TRACEON
+  LOG(LOGS_INFO, LOGF_Sources, "combined result offset=%e sd=%e freq=%e skew=%e",
+      *offset, *offset_sd, *frequency, *skew);
+#endif
+
+  return combined;
+}
+
+/* ================================================== */
 /* This function selects the current reference from amongst the pool
    of sources we are holding. 
    
@@ -432,7 +520,7 @@ SRC_SelectSource(uint32_t match_refid)
   int n_endpoints, j1, j2;
   double best_lo, best_hi;
   int depth, best_depth;
-  int n_sel_sources;
+  int n_sel_sources, combined;
   double distance, sel_src_distance;
   int stratum, min_stratum;
   struct SelectInfo *si;
@@ -454,7 +542,8 @@ SRC_SelectSource(uint32_t match_refid)
     return;
   }
 
-  LCL_ReadCookedTime(&now, NULL);
+  /* This is accurate enough and cheaper than calling LCL_ReadCookedTime */
+  SCH_GetLastEventTime(&now, NULL, NULL);
 
   /* Step 1 - build intervals about each source */
   n_endpoints = 0;
@@ -469,20 +558,16 @@ SRC_SelectSource(uint32_t match_refid)
       si = &(sources[i]->sel_info);
       SST_GetSelectionData(sources[i]->stats, &now,
                            &(si->stratum),
-                           &(si->best_offset),
-                           &(si->root_delay),
-                           &(si->root_dispersion),
+                           &(si->lo_limit),
+                           &(si->hi_limit),
+                           &(si->root_distance),
                            &(si->variance),
                            &(si->select_ok));
 
-      si->root_distance = si->root_dispersion + 0.5 * fabs(si->root_delay);
-      si->lo_limit = si->best_offset - si->root_distance;
-      si->hi_limit = si->best_offset + si->root_distance;
-
 #if 0
-      LOG(LOGS_INFO, LOGF_Sources, "%s off=%f dist=%f lo=%f hi=%f",
+      LOG(LOGS_INFO, LOGF_Sources, "%s dist=%f lo=%f hi=%f",
           source_to_string(sources[i]),
-          si->best_offset, si->root_distance,
+          si->root_distance,
           si->lo_limit, si->hi_limit);
 #endif
       
@@ -771,6 +856,7 @@ SRC_SelectSource(uint32_t match_refid)
           /* Reset score for non-selectable sources */
           if (sources[i]->status != SRC_SELECTABLE) {
             sources[i]->sel_score = 1.0;
+            sources[i]->outlier = OUTLIER_PENALTY;
             continue;
           }
             
@@ -834,6 +920,7 @@ SRC_SelectSource(uint32_t match_refid)
           /* New source has been selected, reset all scores */
           for (i=0; i < n_sources; i++) {
             sources[i]->sel_score = 1.0;
+            sources[i]->outlier = 0;
           }
         }
 
@@ -844,19 +931,25 @@ SRC_SelectSource(uint32_t match_refid)
         if (selected_source_index != old_selected_index ||
             match_refid == sources[selected_source_index]->ref_id) {
 
-          /* Now just use the statistics of the selected source for
-             trimming the local clock */
+          /* Now just use the statistics of the selected source combined with
+             the other selectable sources for trimming the local clock */
 
           SST_GetTrackingData(sources[selected_source_index]->stats, &ref_time,
                               &src_offset, &src_offset_sd,
                               &src_frequency, &src_skew,
                               &src_root_delay, &src_root_dispersion);
 
-          REF_SetReference(min_stratum, leap_status,
+          combined = combine_sources(n_sel_sources, &ref_time, &src_offset,
+                                     &src_offset_sd, &src_frequency, &src_skew);
+
+          REF_SetReference(sources[selected_source_index]->sel_info.stratum,
+                           leap_status,
+                           combined,
                            sources[selected_source_index]->ref_id,
                            sources[selected_source_index]->ip_addr,
                            &ref_time,
                            src_offset,
+                           src_offset_sd,
                            src_frequency,
                            src_skew,
                            src_root_delay,
@@ -1103,12 +1196,29 @@ SRC_ReportSource(int index, RPT_SourceReport *report, struct timeval *now)
         report->state = RPT_FALSETICKER;
         break;
       case SRC_SELECTABLE:
-        report->state = RPT_CANDIDATE;
+        report->state = src->outlier ? RPT_OUTLIER : RPT_CANDIDATE;
         break;
       default:
         assert(0);
         break;
     }
+
+    switch (src->sel_option) {
+      case SRC_SelectNormal:
+        report->sel_option = RPT_NOSELECT;
+        break;
+      case SRC_SelectPrefer:
+        report->sel_option = RPT_PREFER;
+        break;
+      case SRC_SelectNoselect:
+        report->sel_option = RPT_NOSELECT;
+        break;
+      default:
+        assert(0);
+    }
+
+    report->reachability = src->reachability;
+
     /* Call stats module to fill out estimates */
     SST_DoSourceReport(src->stats, report, now);
 

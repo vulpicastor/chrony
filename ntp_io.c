@@ -39,8 +39,6 @@
 #include "conf.h"
 #include "util.h"
 
-#include <fcntl.h>
-
 union sockaddr_in46 {
   struct sockaddr_in in4;
 #ifdef HAVE_IPV6
@@ -212,8 +210,10 @@ prepare_socket(int family)
 #endif
 
   if (bind(sock_fd, &my_addr.u, my_addr_len) < 0) {
-    LOG_FATAL(LOGF_NtpIO, "Could not bind %s NTP socket : %s",
+    LOG(LOGS_ERR, LOGF_NtpIO, "Could not bind %s NTP socket : %s",
         family == AF_INET ? "IPv4" : "IPv6", strerror(errno));
+    close(sock_fd);
+    return -1;
   }
 
   /* Register handler for read events on the socket */
@@ -231,17 +231,25 @@ prepare_socket(int family)
   return sock_fd;
 }
 
+/* ================================================== */
+
 void
-NIO_Initialise(void)
+NIO_Initialise(int family)
 {
   assert(!initialised);
   initialised = 1;
 
   do_size_checks();
 
-  sock_fd4 = prepare_socket(AF_INET);
+  if (family == IPADDR_UNSPEC || family == IPADDR_INET4)
+    sock_fd4 = prepare_socket(AF_INET);
+  else
+    sock_fd4 = -1;
 #ifdef HAVE_IPV6
-  sock_fd6 = prepare_socket(AF_INET6);
+  if (family == IPADDR_UNSPEC || family == IPADDR_INET6)
+    sock_fd6 = prepare_socket(AF_INET6);
+  else
+    sock_fd6 = -1;
 #endif
 
   if (sock_fd4 < 0
@@ -251,8 +259,6 @@ NIO_Initialise(void)
       ) {
     LOG_FATAL(LOGF_NtpIO, "Could not open any NTP socket");
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -273,7 +279,6 @@ NIO_Finalise(void)
   sock_fd6 = -1;
 #endif
   initialised = 0;
-  return;
 }
 
 /* ================================================== */
@@ -291,7 +296,7 @@ read_from_socket(void *anything)
   ReceiveBuffer message;
   union sockaddr_in46 where_from;
   unsigned int flags = 0;
-  struct timeval now;
+  struct timeval now, now_raw;
   double now_err;
   NTP_Remote_Address remote_addr;
   char cmsgbuf[256];
@@ -301,7 +306,7 @@ read_from_socket(void *anything)
 
   assert(initialised);
 
-  SCH_GetFileReadyTime(&now, &now_err);
+  SCH_GetLastEventTime(&now, &now_err, &now_raw);
 
   iov.iov_base = message.arbitrary;
   iov.iov_len = sizeof(message);
@@ -355,7 +360,7 @@ read_from_socket(void *anything)
       }
 #endif
 
-#ifdef IPV6_PKTINFO
+#if defined(IPV6_PKTINFO) && defined(HAVE_IN6_PKTINFO)
       if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_PKTINFO) {
         struct in6_pktinfo ipi;
 
@@ -371,18 +376,16 @@ read_from_socket(void *anything)
         struct timeval tv;
 
         memcpy(&tv, CMSG_DATA(cmsg), sizeof(tv));
-        LCL_CookTime(&tv, &now, &now_err);
+
+        /* This should be more accurate than LCL_CookTime(&now_raw,...) */
+        UTI_AddDiffToTimeval(&now, &now_raw, &tv, &now);
       }
 #endif
     }
 
-    if (status == NTP_NORMAL_PACKET_SIZE) {
+    if (status >= NTP_NORMAL_PACKET_SIZE && status <= sizeof(NTP_Packet)) {
 
-      NSR_ProcessReceive((NTP_Packet *) &message.ntp_pkt, &now, now_err, &remote_addr);
-
-    } else if (status == sizeof(NTP_Packet)) {
-
-      NSR_ProcessAuthenticatedReceive((NTP_Packet *) &message.ntp_pkt, &now, now_err, &remote_addr);
+      NSR_ProcessReceive((NTP_Packet *) &message.ntp_pkt, &now, now_err, &remote_addr, status);
 
     } else {
 
@@ -390,8 +393,6 @@ read_from_socket(void *anything)
 
     }
   }
-  
-  return;
 }
 
 /* ================================================== */
@@ -466,7 +467,7 @@ send_packet(void *packet, int packetlen, NTP_Remote_Address *remote_addr)
   }
 #endif
 
-#ifdef IPV6_PKTINFO
+#if defined(IPV6_PKTINFO) && defined(HAVE_IN6_PKTINFO)
   if (remote_addr->local_ip_addr.family == IPADDR_INET6) {
     struct cmsghdr *cmsg;
     struct in6_pktinfo *ipi;
@@ -506,8 +507,6 @@ send_packet(void *packet, int packetlen, NTP_Remote_Address *remote_addr)
     LOG(LOGS_WARN, LOGF_NtpIO, "Could not send to %s:%d : %s",
         UTI_IPToString(&remote_addr->ip_addr), remote_addr->port, strerror(errno));
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -523,9 +522,9 @@ NIO_SendNormalPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr)
 /* Send an authenticated packet to a given address */
 
 void
-NIO_SendAuthenticatedPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr)
+NIO_SendAuthenticatedPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr, int auth_len)
 {
-  send_packet((void *) packet, sizeof(NTP_Packet), remote_addr);
+  send_packet((void *) packet, NTP_NORMAL_PACKET_SIZE + auth_len, remote_addr);
 }
 
 /* ================================================== */

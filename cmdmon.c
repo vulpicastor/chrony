@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009-2011
+ * Copyright (C) Miroslav Lichvar  2009-2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -34,7 +34,6 @@
 #include "sched.h"
 #include "util.h"
 #include "logging.h"
-#include "md5.h"
 #include "keys.h"
 #include "ntp_sources.h"
 #include "ntp_core.h"
@@ -187,9 +186,6 @@ prepare_socket(int family)
   int on_off = 1;
 
   port_number = CNF_GetCommandPort();
-  if (port_number < 0) {
-    port_number = DEFAULT_CANDM_PORT;
-  }
 
   sock_fd = socket(family, SOCK_DGRAM, 0);
   if (sock_fd < 0) {
@@ -252,8 +248,10 @@ prepare_socket(int family)
   }
 
   if (bind(sock_fd, &my_addr.u, my_addr_len) < 0) {
-    LOG_FATAL(LOGF_CmdMon, "Could not bind %s command socket : %s",
+    LOG(LOGS_ERR, LOGF_CmdMon, "Could not bind %s command socket : %s",
         family == AF_INET ? "IPv4" : "IPv6", strerror(errno));
+    close(sock_fd);
+    return -1;
   }
 
   /* Register handler for read events on the socket */
@@ -265,7 +263,7 @@ prepare_socket(int family)
 /* ================================================== */
 
 void
-CAM_Initialise(void)
+CAM_Initialise(int family)
 {
   assert(!initialised);
   initialised = 1;
@@ -281,9 +279,15 @@ CAM_Initialise(void)
   free_replies = NULL;
   kept_replies.next = NULL;
 
-  sock_fd4 = prepare_socket(AF_INET);
+  if (family == IPADDR_UNSPEC || family == IPADDR_INET4)
+    sock_fd4 = prepare_socket(AF_INET);
+  else
+    sock_fd4 = -1;
 #ifdef HAVE_IPV6
-  sock_fd6 = prepare_socket(AF_INET6);
+  if (family == IPADDR_UNSPEC || family == IPADDR_INET6)
+    sock_fd6 = prepare_socket(AF_INET6);
+  else
+    sock_fd6 = -1;
 #endif
 
   if (sock_fd4 < 0
@@ -319,7 +323,6 @@ CAM_Finalise(void)
   ADF_DestroyTable(access_auth_table);
 
   initialised = 0;
-  return;
 }
 
 /* ================================================== */
@@ -328,57 +331,28 @@ CAM_Finalise(void)
    rest of the packet */
 
 static int
-check_rx_packet_auth(CMD_Request *packet)
+check_rx_packet_auth(CMD_Request *packet, int packet_len)
 {
-
-  char *key;
-  int keylen;
-  int pkt_len;
-  MD5_CTX ctx;
+  int pkt_len, auth_len;
 
   pkt_len = PKL_CommandLength(packet);
+  auth_len = packet_len - pkt_len;
 
-  KEY_CommandKey(&key, &keylen);
-
-  MD5Init(&ctx);
-  MD5Update(&ctx, (unsigned char *) key, keylen);
-  MD5Update(&ctx, (unsigned char *) packet, offsetof(CMD_Request, auth));
-  if (pkt_len > offsetof(CMD_Request, data)) {
-    MD5Update(&ctx, (unsigned char *) &(packet->data), pkt_len - offsetof(CMD_Request, data));
-  }
-  MD5Final(&ctx);
-
-  if (!memcmp((void *) &ctx.digest, (void *) &(packet->auth), 16)) {
-    return 1;
-  } else {
-    return 0;
-  }
+  return KEY_CheckAuth(KEY_GetCommandKey(), (unsigned char *)packet,
+      pkt_len, ((unsigned char *)packet) + pkt_len, auth_len);
 }
 
 /* ================================================== */
 
-static void
+static int
 generate_tx_packet_auth(CMD_Reply *packet)
 {
-  char *key;
-  int keylen;
-  MD5_CTX ctx;
   int pkt_len;
 
   pkt_len = PKL_ReplyLength(packet);
 
-  KEY_CommandKey(&key, &keylen);
-
-  MD5Init(&ctx);
-  MD5Update(&ctx, (unsigned char *) key, keylen);
-  MD5Update(&ctx, (unsigned char *) packet, offsetof(CMD_Request, auth));
-  if (pkt_len > offsetof(CMD_Reply, data)) {
-    MD5Update(&ctx, (unsigned char *) &(packet->data), pkt_len - offsetof(CMD_Reply, data));
-  }
-  MD5Final(&ctx);
-
-  memcpy(&(packet->auth), &ctx.digest, 16);
-
+  return KEY_GenerateAuth(KEY_GetCommandKey(), (unsigned char *)packet,
+      pkt_len, ((unsigned char *)packet) + pkt_len, sizeof (packet->auth));
 }
 
 /* ================================================== */
@@ -720,7 +694,7 @@ print_reply_packet(CMD_Reply *pkt)
 /* ================================================== */
 
 static void
-transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to)
+transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
 {
   int status;
   int tx_message_length;
@@ -742,7 +716,7 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to)
       assert(0);
   }
 
-  tx_message_length = PKL_ReplyLength(msg);
+  tx_message_length = PKL_ReplyLength(msg) + auth_len;
   status = sendto(sock_fd, (void *) msg, tx_message_length, 0,
                   &where_to->u, addrlen);
 
@@ -769,8 +743,6 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to)
 
     LOG(LOGS_WARN, LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&ip), port);
   }
-
-  return;
 }
   
 
@@ -980,7 +952,7 @@ handle_settime(CMD_Request *rx_message, CMD_Reply *tx_message)
   if (MNL_AcceptTimestamp(&ts, &offset_cs, &dfreq_ppm, &new_afreq_ppm)) {
     tx_message->status = htons(STT_SUCCESS);
     tx_message->reply = htons(RPY_MANUAL_TIMESTAMP);
-    tx_message->data.manual_timestamp.centiseconds = htonl(offset_cs);
+    tx_message->data.manual_timestamp.centiseconds = htonl((int32_t)offset_cs);
     tx_message->data.manual_timestamp.dfreq_ppm = UTI_FloatHostToNetwork(dfreq_ppm);
     tx_message->data.manual_timestamp.new_afreq_ppm = UTI_FloatHostToNetwork(new_afreq_ppm);
   } else {
@@ -1079,6 +1051,9 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
       case RPT_CANDIDATE:
         tx_message->data.source_data.state   = htons(RPY_SD_ST_CANDIDATE);
         break;
+      case RPT_OUTLIER:
+        tx_message->data.source_data.state   = htons(RPY_SD_ST_OUTLIER);
+        break;
     }
     switch (report.mode) {
       case RPT_NTP_CLIENT:
@@ -1091,6 +1066,18 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
         tx_message->data.source_data.mode    = htons(RPY_SD_MD_REF);
         break;
     }
+    switch (report.sel_option) {
+      case RPT_NORMAL:
+        tx_message->data.source_data.flags = htons(0);
+        break;
+      case RPT_PREFER:
+        tx_message->data.source_data.flags = htons(RPY_SD_FLAG_PREFER);
+        break;
+      case RPT_NOSELECT:
+        tx_message->data.source_data.flags = htons(RPY_SD_FLAG_PREFER);
+        break;
+    }
+    tx_message->data.source_data.reachability = htons(report.reachability);
     tx_message->data.source_data.since_sample = htonl(report.latest_meas_ago);
     tx_message->data.source_data.orig_latest_meas = UTI_FloatHostToNetwork(report.orig_latest_meas);
     tx_message->data.source_data.latest_meas = UTI_FloatHostToNetwork(report.latest_meas);
@@ -1383,7 +1370,7 @@ handle_doffset(CMD_Request *rx_message, CMD_Reply *tx_message)
   usec = (long)(ntohl(rx_message->data.doffset.usec));
   doffset = (double) sec + 1.0e-6 * (double) usec;
   LOG(LOGS_INFO, LOGF_CmdMon, "Accumulated delta offset of %.6f seconds", doffset);
-  LCL_AccumulateOffset(doffset);
+  LCL_AccumulateOffset(doffset, 0.0);
   tx_message->status = htons(STT_SUCCESS);
 }
 
@@ -1399,14 +1386,18 @@ handle_tracking(CMD_Request *rx_message, CMD_Reply *tx_message)
   tx_message->reply  = htons(RPY_TRACKING);
   tx_message->data.tracking.ref_id = htonl(rpt.ref_id);
   UTI_IPHostToNetwork(&rpt.ip_addr, &tx_message->data.tracking.ip_addr);
-  tx_message->data.tracking.stratum = htonl(rpt.stratum);
+  tx_message->data.tracking.stratum = htons(rpt.stratum);
+  tx_message->data.tracking.leap_status = htons(rpt.leap_status);
   UTI_TimevalHostToNetwork(&rpt.ref_time, &tx_message->data.tracking.ref_time);
   tx_message->data.tracking.current_correction = UTI_FloatHostToNetwork(rpt.current_correction);
+  tx_message->data.tracking.last_offset = UTI_FloatHostToNetwork(rpt.last_offset);
+  tx_message->data.tracking.rms_offset = UTI_FloatHostToNetwork(rpt.rms_offset);
   tx_message->data.tracking.freq_ppm = UTI_FloatHostToNetwork(rpt.freq_ppm);
   tx_message->data.tracking.resid_freq_ppm = UTI_FloatHostToNetwork(rpt.resid_freq_ppm);
   tx_message->data.tracking.skew_ppm = UTI_FloatHostToNetwork(rpt.skew_ppm);
   tx_message->data.tracking.root_delay = UTI_FloatHostToNetwork(rpt.root_delay);
   tx_message->data.tracking.root_dispersion = UTI_FloatHostToNetwork(rpt.root_dispersion);
+  tx_message->data.tracking.last_update_interval = UTI_FloatHostToNetwork(rpt.last_update_interval);
 }
 
 /* ================================================== */
@@ -1460,7 +1451,6 @@ handle_rtcreport(CMD_Request *rx_message, CMD_Reply *tx_message)
   } else {
     tx_message->status = htons(STT_NORTC);
   }
-  return;
 }
 
 /* ================================================== */
@@ -1475,7 +1465,6 @@ handle_trimrtc(CMD_Request *rx_message, CMD_Reply *tx_message)
   } else {
     tx_message->status = htons(STT_NORTC);
   }
-  return;
 }
 
 /* ================================================== */
@@ -1486,110 +1475,6 @@ handle_cyclelogs(CMD_Request *rx_message, CMD_Reply *tx_message)
   LOG_CycleLogFiles();
   
   tx_message->status = htons(STT_SUCCESS);
-  return;
-}
-
-/* ================================================== */
-
-#define FLIPL(X) ((X) = htonl(X))
-
-static void
-handle_subnets_accessed(CMD_Request *rx_message, CMD_Reply *tx_message)
-{
-  int i, j;
-  unsigned long ns, bits_specd;
-  IPAddr ip;
-  CLG_Status result;
-  
-  ns = ntohl(rx_message->data.subnets_accessed.n_subnets);
-  tx_message->status = htons(STT_SUCCESS);
-  tx_message->reply = htons(RPY_SUBNETS_ACCESSED);
-  tx_message->data.subnets_accessed.n_subnets = htonl(ns);
-
-  for (i=0; i<ns; i++) {
-    UTI_IPNetworkToHost(&rx_message->data.subnets_accessed.subnets[i].ip, &ip);
-    bits_specd = ntohl(rx_message->data.subnets_accessed.subnets[i].bits_specd);
-
-    UTI_IPHostToNetwork(&ip, &tx_message->data.subnets_accessed.subnets[i].ip);
-    tx_message->data.subnets_accessed.subnets[i].bits_specd = htonl(bits_specd);
-    
-    result = CLG_GetSubnetBitmap(&ip, bits_specd, tx_message->data.subnets_accessed.subnets[i].bitmap);
-    switch (result) {
-      case CLG_SUCCESS:
-      case CLG_EMPTYSUBNET:
-        /* Flip endianness of each 4 byte word.  Don't care if subnet
-           is empty - just return an all-zero bitmap. */
-        for (j=0; j<8; j++) {
-          FLIPL(tx_message->data.subnets_accessed.subnets[i].bitmap[j]);
-        }
-        break;
-      case CLG_BADSUBNET:
-        tx_message->status = htons(STT_BADSUBNET);
-        return;
-      case CLG_INACTIVE:
-        tx_message->status = htons(STT_INACTIVE);
-        return;
-      default:
-        assert(0);
-        break;
-    }
-  }
-
-  return;
-}
-
-/* ================================================== */
-
-static void
-handle_client_accesses(CMD_Request *rx_message, CMD_Reply *tx_message)
-{
-  CLG_Status result;
-  RPT_ClientAccess_Report report;
-  unsigned long nc;
-  IPAddr ip;
-  int i;
-  struct timeval now;
-
-  LCL_ReadCookedTime(&now, NULL);
-
-  nc = ntohl(rx_message->data.client_accesses.n_clients);
-  tx_message->status = htons(STT_SUCCESS);
-  tx_message->reply = htons(RPY_CLIENT_ACCESSES);
-  tx_message->data.client_accesses.n_clients = htonl(nc);
-
-  printf("%d %d\n", (int)sizeof(RPY_ClientAccesses_Client), (int)offsetof(CMD_Reply, data.client_accesses.clients));
-
-  for (i=0; i<nc; i++) {
-    UTI_IPNetworkToHost(&rx_message->data.client_accesses.client_ips[i], &ip);
-    UTI_IPHostToNetwork(&ip, &tx_message->data.client_accesses.clients[i].ip);
-
-    result = CLG_GetClientAccessReportByIP(&ip, &report, now.tv_sec);
-    switch (result) {
-      case CLG_SUCCESS:
-        tx_message->data.client_accesses.clients[i].client_hits = htonl(report.client_hits);
-        tx_message->data.client_accesses.clients[i].peer_hits = htonl(report.peer_hits);
-        tx_message->data.client_accesses.clients[i].cmd_hits_auth = htonl(report.cmd_hits_auth);
-        tx_message->data.client_accesses.clients[i].cmd_hits_normal = htonl(report.cmd_hits_normal);
-        tx_message->data.client_accesses.clients[i].cmd_hits_bad = htonl(report.cmd_hits_bad);
-        tx_message->data.client_accesses.clients[i].last_ntp_hit_ago = htonl(report.last_ntp_hit_ago);
-        tx_message->data.client_accesses.clients[i].last_cmd_hit_ago = htonl(report.last_cmd_hit_ago);
-        printf("%s %lu %lu %lu %lu %lu %lu %lu\n", UTI_IPToString(&ip), report.client_hits, report.peer_hits, report.cmd_hits_auth, report.cmd_hits_normal, report.cmd_hits_bad, report.last_ntp_hit_ago, report.last_cmd_hit_ago);
-        break;
-      case CLG_EMPTYSUBNET:
-        /* Signal back to the client that this single client address
-           was unknown */
-        ip.family = IPADDR_UNSPEC;
-        UTI_IPHostToNetwork(&ip, &tx_message->data.client_accesses.clients[i].ip);
-        break;
-      case CLG_INACTIVE:
-        tx_message->status = htons(STT_INACTIVE);
-        return;
-      default:
-        assert(0);
-        break;
-    }
-  }
-
 }
 
 /* ================================================== */
@@ -1694,7 +1579,6 @@ handle_make_step(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
   LCL_MakeStep(0.0);
   tx_message->status = htons(STT_SUCCESS);
-  return;
 }
 
 /* ================================================== */
@@ -1708,6 +1592,7 @@ handle_activity(CMD_Request *rx_message, CMD_Reply *tx_message)
   tx_message->data.activity.offline = htonl(report.offline);
   tx_message->data.activity.burst_online = htonl(report.burst_online);
   tx_message->data.activity.burst_offline = htonl(report.burst_offline);
+  tx_message->data.activity.unresolved = htonl(report.unresolved);
   tx_message->status = htons(STT_SUCCESS);
   tx_message->reply = htons(RPY_ACTIVITY);
 }
@@ -1721,7 +1606,6 @@ handle_reselect_distance(CMD_Request *rx_message, CMD_Reply *tx_message)
   dist = UTI_FloatNetworkToHost(rx_message->data.reselect_distance.distance);
   SRC_SetReselectDistance(dist);
   tx_message->status = htons(STT_SUCCESS);
-  return;
 }
 
 /* ================================================== */
@@ -1731,7 +1615,6 @@ handle_reselect(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
   SRC_ReselectSource();
   tx_message->status = htons(STT_SUCCESS);
-  return;
 }
 
 /* ================================================== */
@@ -1756,7 +1639,7 @@ read_from_cmd_socket(void *anything)
 {
   int status;
   int read_length; /* Length of packet read */
-  int expected_length; /* Expected length of packet */
+  int expected_length; /* Expected length of packet without auth data */
   unsigned long flags;
   CMD_Request rx_message;
   CMD_Reply tx_message, *prev_tx_message;
@@ -1766,7 +1649,8 @@ read_from_cmd_socket(void *anything)
   socklen_t from_length;
   IPAddr remote_ip;
   unsigned short remote_port;
-  int md5_ok;
+  int auth_length;
+  int auth_ok;
   int utoken_ok, token_ok;
   int issue_token;
   int valid_ts;
@@ -1796,28 +1680,9 @@ read_from_cmd_socket(void *anything)
   }
 
   read_length = status;
-  expected_length = PKL_CommandLength(&rx_message);
-  rx_command = ntohs(rx_message.command);
 
   LCL_ReadRawTime(&now);
   LCL_CookTime(&now, &cooked_now, NULL);
-
-  tx_message.version = PROTO_VERSION_NUMBER;
-  tx_message.pkt_type = PKT_TYPE_CMD_REPLY;
-  tx_message.res1 = 0;
-  tx_message.res2 = 0;
-  tx_message.command = rx_message.command;
-  tx_message.sequence = rx_message.sequence;
-  tx_message.reply = htons(RPY_NULL);
-  tx_message.number = htons(1);
-  tx_message.total = htons(1);
-  tx_message.pad1 = 0;
-  tx_message.utoken = htonl(utoken);
-  /* Set this to a default (invalid) value.  This protects against the
-     token field being set to an arbitrary value if we reject the
-     message, e.g. due to the host failing the access check. */
-  tx_message.token = htonl(0xffffffffUL);
-  memset(&tx_message.auth, 0, sizeof(tx_message.auth));
 
   switch (where_from.u.sa_family) {
     case AF_INET:
@@ -1845,7 +1710,14 @@ read_from_cmd_socket(void *anything)
 
   allowed = ADF_IsAllowed(access_auth_table, &remote_ip) || localhost;
 
-  if (read_length < offsetof(CMD_Request, data) ||
+  /* Message size sanity check */
+  if (read_length >= offsetof(CMD_Request, data)) {
+    expected_length = PKL_CommandLength(&rx_message);
+  } else {
+    expected_length = 0;
+  }
+
+  if (expected_length < offsetof(CMD_Request, data) ||
       rx_message.pkt_type != PKT_TYPE_CMD_REQUEST ||
       rx_message.res1 != 0 ||
       rx_message.res2 != 0) {
@@ -1857,6 +1729,25 @@ read_from_cmd_socket(void *anything)
     return;
   }
 
+  rx_command = ntohs(rx_message.command);
+
+  tx_message.version = PROTO_VERSION_NUMBER;
+  tx_message.pkt_type = PKT_TYPE_CMD_REPLY;
+  tx_message.res1 = 0;
+  tx_message.res2 = 0;
+  tx_message.command = rx_message.command;
+  tx_message.sequence = rx_message.sequence;
+  tx_message.reply = htons(RPY_NULL);
+  tx_message.number = htons(1);
+  tx_message.total = htons(1);
+  tx_message.pad1 = 0;
+  tx_message.utoken = htonl(utoken);
+  /* Set this to a default (invalid) value.  This protects against the
+     token field being set to an arbitrary value if we reject the
+     message, e.g. due to the host failing the access check. */
+  tx_message.token = htonl(0xffffffffUL);
+  memset(&tx_message.auth, 0, sizeof(tx_message.auth));
+
   if (rx_message.version != PROTO_VERSION_NUMBER) {
     tx_message.status = htons(STT_NOHOSTACCESS);
     if (!LOG_RateLimited()) {
@@ -1867,7 +1758,10 @@ read_from_cmd_socket(void *anything)
 
     if (rx_message.version >= PROTO_VERSION_MISMATCH_COMPAT) {
       tx_message.status = htons(STT_BADPKTVERSION);
-      transmit_reply(&tx_message, &where_from);
+      /* add empty MD5 auth so older clients will not drop
+         the reply due to bad length */
+      memset(((char *)&tx_message) + PKL_ReplyLength(&tx_message), 0, 16);
+      transmit_reply(&tx_message, &where_from, 16);
     }
     return;
   }
@@ -1880,11 +1774,11 @@ read_from_cmd_socket(void *anything)
       CLG_LogCommandAccess(&remote_ip, CLG_CMD_BAD_PKT, cooked_now.tv_sec);
 
     tx_message.status = htons(STT_INVALID);
-    transmit_reply(&tx_message, &where_from);
+    transmit_reply(&tx_message, &where_from, 0);
     return;
   }
 
-  if (read_length != expected_length) {
+  if (read_length < expected_length) {
     if (!LOG_RateLimited()) {
       LOG(LOGS_WARN, LOGF_CmdMon, "Read incorrectly sized command packet from %s:%hu", UTI_IPToString(&remote_ip), remote_port);
     }
@@ -1892,7 +1786,7 @@ read_from_cmd_socket(void *anything)
       CLG_LogCommandAccess(&remote_ip, CLG_CMD_BAD_PKT, cooked_now.tv_sec);
 
     tx_message.status = htons(STT_BADPKTLENGTH);
-    transmit_reply(&tx_message, &where_from);
+    transmit_reply(&tx_message, &where_from, 0);
     return;
   }
 
@@ -1909,7 +1803,7 @@ read_from_cmd_socket(void *anything)
     }
 
     tx_message.status = htons(STT_NOHOSTACCESS);
-    transmit_reply(&tx_message, &where_from);
+    transmit_reply(&tx_message, &where_from, 0);
 
     return;
   }
@@ -1920,18 +1814,18 @@ read_from_cmd_socket(void *anything)
      clients will set their utokens to 0 to save us wasting our time
      if the packet is unauthenticatable. */
   if (rx_message.utoken != 0) {
-    md5_ok = check_rx_packet_auth(&rx_message);
+    auth_ok = check_rx_packet_auth(&rx_message, read_length);
   } else {
-    md5_ok = 0;
+    auth_ok = 0;
   }
 
   /* All this malarky is to protect the system against various forms
      of attack.
 
      Simple packet forgeries are blocked by requiring the packet to
-     authenticate properly with MD5.  (The assumption is that the
-     command key is in a read-only keys file read by the daemon, and
-     is known only to administrators.)
+     authenticate properly with MD5 or other crypto hash.  (The
+     assumption is that the command key is in a read-only keys file
+     read by the daemon, and is known only to administrators.)
 
      Replay attacks are prevented by 2 fields in the packet.  The
      'token' field is where the client plays back to us a token that
@@ -1973,13 +1867,13 @@ read_from_cmd_socket(void *anything)
   rx_message_seq = ntohl(rx_message.sequence);
   rx_attempt = ntohs(rx_message.attempt);
 
-  if (md5_ok && utoken_ok) {
+  if (auth_ok && utoken_ok) {
     token_ok = check_token(rx_message_token);
   } else {
     token_ok = 0;
   }
 
-  if (md5_ok && utoken_ok && !token_ok) {
+  if (auth_ok && utoken_ok && !token_ok) {
     /* This might be a resent message, due to the client not getting
        our reply to the first attempt.  See if we can find the message. */
     prev_tx_message = lookup_reply(rx_message_token, rx_message_seq, rx_attempt);
@@ -1997,14 +1891,14 @@ read_from_cmd_socket(void *anything)
 
   }
 
-  if (md5_ok && utoken_ok && token_ok) {
+  if (auth_ok && utoken_ok && token_ok) {
     /* See whether we can discard the previous reply from storage */
     token_acknowledged(rx_message_token, &now);
   }
 
   valid_ts = 0;
 
-  if (md5_ok) {
+  if (auth_ok) {
     struct timeval ts;
 
     UTI_TimevalNetworkToHost(&rx_message.data.logon.ts, &ts);
@@ -2019,7 +1913,7 @@ read_from_cmd_socket(void *anything)
     issue_token = 0;
   }
 
-  authenticated = md5_ok & utoken_ok & token_ok;
+  authenticated = auth_ok & utoken_ok & token_ok;
 
   if (authenticated) {
     CLG_LogCommandAccess(&remote_ip, CLG_CMD_AUTH, cooked_now.tv_sec);
@@ -2119,15 +2013,15 @@ read_from_cmd_socket(void *anything)
           /* If the log-on fails, record the reason why */
           if (!issue_token && !LOG_RateLimited()) {
             LOG(LOGS_WARN, LOGF_CmdMon,
-                "Bad command logon from %s port %d (md5_ok=%d valid_ts=%d)\n",
+                "Bad command logon from %s port %d (auth_ok=%d valid_ts=%d)",
                 UTI_IPToString(&remote_ip),
                 remote_port,
-                md5_ok, valid_ts);
+                auth_ok, valid_ts);
           }
 
           if (issue_token == 1) {
             tx_message.status = htons(STT_SUCCESS);
-          } else if (!md5_ok) {
+          } else if (!auth_ok) {
             tx_message.status = htons(STT_UNAUTH);
           } else if (!valid_ts) {
             tx_message.status = htons(STT_INVALIDTS);
@@ -2245,14 +2139,6 @@ read_from_cmd_socket(void *anything)
           handle_cyclelogs(&rx_message, &tx_message);
           break;
 
-        case REQ_SUBNETS_ACCESSED:
-          handle_subnets_accessed(&rx_message, &tx_message);
-          break;
-
-        case REQ_CLIENT_ACCESSES:
-          handle_client_accesses(&rx_message, &tx_message);
-          break;
-
         case REQ_CLIENT_ACCESSES_BY_INDEX:
           handle_client_accesses_by_index(&rx_message, &tx_message);
           break;
@@ -2298,8 +2184,10 @@ read_from_cmd_socket(void *anything)
     }
   }
 
-  if (md5_ok) {
-    generate_tx_packet_auth(&tx_message);
+  if (auth_ok) {
+    auth_length = generate_tx_packet_auth(&tx_message);
+  } else {
+    auth_length = 0;
   }
 
   if (token_ok) {
@@ -2318,16 +2206,13 @@ read_from_cmd_socket(void *anything)
     static int do_it=1;
 
     if (do_it) {
-      transmit_reply(&tx_message, &where_from);
+      transmit_reply(&tx_message, &where_from, auth_length);
     }
 
 #if 0
     do_it = ((do_it + 1) % 3);
 #endif
   }
-
-  return;
-
 }
 
 /* ================================================== */

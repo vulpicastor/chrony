@@ -3,6 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
+ * Copyright (C) Miroslav Lichvar  2013
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -33,19 +34,16 @@
 #include "cmdparse.h"
 #include "memory.h"
 #include "nameserv.h"
-
-#define MAXLEN 2047
-#define SMAXLEN "2047"
+#include "util.h"
 
 /* ================================================== */
 
 CPS_Status
-CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
+CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
 {
+  char *hostname, *cmd;
   int ok, n, done;
-  char cmd[MAXLEN+1], hostname[MAXLEN+1];
   CPS_Status result;
-  DNS_Status s;
   
   src->port = SRC_DEFAULT_PORT;
   src->params.minpoll = SRC_DEFAULT_MINPOLL;
@@ -64,33 +62,22 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
 
   result = CPS_Success;
   
-  ok = 0;
-  if (sscanf(line, "%" SMAXLEN "s%n", hostname, &n) == 1) {
-    s = DNS_Name2IPAddress(hostname, &src->ip_addr);
-    if (s == DNS_Success) {
-      ok = 1;
-      src->name = NULL;
-    } else if (s == DNS_TryAgain) {
-      ok = 1;
-      src->ip_addr.family = IPADDR_UNSPEC;
-    }
-  }
+  hostname = line;
+  line = CPS_SplitWord(line);
 
-  if (!ok) {
+  if (!*hostname) {
     result = CPS_BadHost;
+    ok = 0;
   } else {
-
-    line += n;
-    
     /* Parse subfields */
     ok = 1;
     done = 0;
     do {
-      if (sscanf(line, "%" SMAXLEN "s%n", cmd, &n) == 1) {
-        
-        line += n;
-        
-        if (!strncasecmp(cmd, "port", 4)) {
+      cmd = line;
+      line = CPS_SplitWord(line);
+
+      if (*cmd) {
+        if (!strcasecmp(cmd, "port")) {
           if (sscanf(line, "%hu%n", &src->port, &n) != 1) {
             result = CPS_BadPort;
             ok = 0;
@@ -98,7 +85,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "minpoll", 7)) {
+        } else if (!strcasecmp(cmd, "minpoll")) {
           if (sscanf(line, "%d%n", &src->params.minpoll, &n) != 1) {
             result = CPS_BadMinpoll;
             ok = 0;
@@ -106,7 +93,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "maxpoll", 7)) {
+        } else if (!strcasecmp(cmd, "maxpoll")) {
           if (sscanf(line, "%d%n", &src->params.maxpoll, &n) != 1) {
             result = CPS_BadMaxpoll;
             ok = 0;
@@ -114,7 +101,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "presend", 7)) {
+        } else if (!strcasecmp(cmd, "presend")) {
           if (sscanf(line, "%d%n", &src->params.presend_minpoll, &n) != 1) {
             result = CPS_BadPresend;
             ok = 0;
@@ -122,7 +109,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "maxdelaydevratio", 16)) {
+        } else if (!strcasecmp(cmd, "maxdelaydevratio")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay_dev_ratio, &n) != 1) {
             result = CPS_BadMaxdelaydevratio;
             ok = 0;
@@ -130,8 +117,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-          /* This MUST come before the following one ! */
-        } else if (!strncasecmp(cmd, "maxdelayratio", 13)) {
+        } else if (!strcasecmp(cmd, "maxdelayratio")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay_ratio, &n) != 1) {
             result = CPS_BadMaxdelayratio;
             ok = 0;
@@ -139,7 +125,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "maxdelay", 8)) {
+        } else if (!strcasecmp(cmd, "maxdelay")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay, &n) != 1) {
             result = CPS_BadMaxdelay;
             ok = 0;
@@ -147,7 +133,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "key", 3)) {
+        } else if (!strcasecmp(cmd, "key")) {
           if (sscanf(line, "%lu%n", &src->params.authkey, &n) != 1) {
             result = CPS_BadKey;
             ok = 0;
@@ -155,16 +141,16 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
           } else {
             line += n;
           }
-        } else if (!strncasecmp(cmd, "offline", 7)) {
+        } else if (!strcasecmp(cmd, "offline")) {
           src->params.online = 0;
 
-        } else if (!strncasecmp(cmd, "auto_offline", 12)) {
+        } else if (!strcasecmp(cmd, "auto_offline")) {
           src->params.auto_offline = 1;
         
-        } else if (!strncasecmp(cmd, "iburst", 6)) {
+        } else if (!strcasecmp(cmd, "iburst")) {
           src->params.iburst = 1;
 
-        } else if (!strncasecmp(cmd, "minstratum", 10)) {
+        } else if (!strcasecmp(cmd, "minstratum")) {
           if (sscanf(line, "%d%n", &src->params.min_stratum, &n) != 1) {
             result = CPS_BadMinstratum;
             ok = 0;
@@ -173,7 +159,7 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
             line += n;
           }
 
-        } else if (!strncasecmp(cmd, "polltarget", 10)) {
+        } else if (!strcasecmp(cmd, "polltarget")) {
           if (sscanf(line, "%d%n", &src->params.poll_target, &n) != 1) {
             result = CPS_BadPolltarget;
             ok = 0;
@@ -182,10 +168,10 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
             line += n;
           }
 
-        } else if (!strncasecmp(cmd, "noselect", 8)) {
+        } else if (!strcasecmp(cmd, "noselect")) {
           src->params.sel_option = SRC_SelectNoselect;
         
-        } else if (!strncasecmp(cmd, "prefer", 6)) {
+        } else if (!strcasecmp(cmd, "prefer")) {
           src->params.sel_option = SRC_SelectPrefer;
         
         } else {
@@ -199,11 +185,8 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
     } while (!done);
   }
 
-  if (ok && src->ip_addr.family == IPADDR_UNSPEC) {
-    n = strlen(hostname);
-    src->name = MallocArray(char, n + 1);
-    strncpy(src->name, hostname, n);
-    src->name[n] = '\0';
+  if (ok) {
+    src->name = strdup(hostname);
   }
 
   return result;
@@ -212,3 +195,87 @@ CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src)
 
 /* ================================================== */
 
+void
+CPS_NormalizeLine(char *line)
+{
+  char *p, *q;
+  int space = 1, first = 1;
+
+  /* Remove white-space at beginning and replace white-spaces with space char */
+  for (p = q = line; *p; p++) {
+    if (isspace(*p)) {
+      if (!space)
+        *q++ = ' ';
+      space = 1;
+      continue;
+    }
+
+    /* Discard comment lines */
+    if (first && strchr("!;#%", *p))
+      break;
+
+    *q++ = *p;
+    space = first = 0;
+  }
+
+  /* Strip trailing space */
+  if (q > line && q[-1] == ' ')
+    q--;
+
+  *q = '\0';
+}
+
+/* ================================================== */
+
+char *
+CPS_SplitWord(char *line)
+{
+  char *p = line, *q = line;
+
+  /* Skip white-space before the word */
+  while (*q && isspace(*q))
+    q++;
+
+  /* Move the word to the beginning */
+  while (*q && !isspace(*q))
+    *p++ = *q++;
+
+  /* Find the next word */
+  while (*q && isspace(*q))
+    q++;
+
+  *p = '\0';
+
+  /* Return pointer to the next word or NUL */
+  return q;
+}
+
+/* ================================================== */
+
+int
+CPS_ParseKey(char *line, unsigned long *id, const char **hash, char **key)
+{
+  char *s1, *s2, *s3, *s4;
+
+  s1 = line;
+  s2 = CPS_SplitWord(s1);
+  s3 = CPS_SplitWord(s2);
+  s4 = CPS_SplitWord(s3);
+
+  /* Require two or three words */
+  if (!*s2 || *s4)
+    return 0;
+
+  if (sscanf(s1, "%lu", id) != 1)
+    return 0;
+
+  if (*s3) {
+    *hash = s2;
+    *key = s3;
+  } else {
+    *hash = "MD5";
+    *key = s2;
+  }
+
+  return 1;
+}

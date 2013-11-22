@@ -3,6 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
+ * Copyright (C) Miroslav Lichvar  2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -28,25 +29,8 @@
 
 #include "config.h"
 
-#if defined LINUX
+#include "sysincl.h"
 
-#ifdef sparc
-#define __KERNEL__
-#endif
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-#include <time.h>
-#include <sys/time.h>
-#include <sys/types.h>
-
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <errno.h>
-#include <assert.h>
-#include <string.h>
 #include <linux/rtc.h>
 
 #include "logging.h"
@@ -188,7 +172,6 @@ discard_samples(int new_first)
   memmove(system_times, system_times + new_first, n_to_save * sizeof(struct timeval));
 
   n_samples = n_to_save;
-  return;
 }
 
 /* ================================================== */
@@ -216,8 +199,6 @@ accumulate_sample(time_t rtc, struct timeval *sys)
   ++n_samples_since_regression;
   }
   ++n_samples;
-  return;
-  
 }
 
 /* ================================================== */
@@ -469,10 +450,14 @@ write_coefs_to_file(int valid,time_t ref_time,double offset,double rate)
   }
 
   /* Gain rate is written out in ppm */
-  fprintf(out, "%1d %ld %.6f %.3f\n",
-          valid,ref_time, offset, 1.0e6 * rate);
-
-  fclose(out);
+  if ((fprintf(out, "%1d %ld %.6f %.3f\n",
+          valid,ref_time, offset, 1.0e6 * rate) < 0) |
+      fclose(out)) {
+    Free(temp_coefs_file_name);
+    LOG(LOGS_WARN, LOGF_RtcLinux, "Could not write to temporary RTC file %s.tmp",
+        coefs_file_name);
+    return RTC_ST_BADFILE;
+  }
 
   /* Clone the file attributes from the existing file if there is one. */
 
@@ -664,7 +649,7 @@ handle_initial_trim(void)
     sys_error_now = rtc_error_now - coef_seconds_fast;
           
     LOG(LOGS_INFO, LOGF_RtcLinux, "System trim from RTC = %f", sys_error_now);
-    LCL_AccumulateOffset(sys_error_now);
+    LCL_AccumulateOffset(sys_error_now, 0.0);
   } else {
     LOG(LOGS_WARN, LOGF_RtcLinux, "No valid file coefficients, cannot trim system time");
   }
@@ -674,8 +659,6 @@ handle_initial_trim(void)
   (after_init_hook)(after_init_hook_arg);
   
   operating_mode = OM_NORMAL;
-
-  return;
 }
 
 /* ================================================== */
@@ -695,6 +678,7 @@ handle_relock_after_trim(void)
     LOG(LOGS_WARN, LOGF_RtcLinux, "Could not do regression after trim");
   }
 
+  coefs_valid = 0;
   n_samples = 0;
   n_samples_since_regression = 0;
   operating_mode = OM_NORMAL;
@@ -789,7 +773,7 @@ read_from_device(void *any)
     /* Read RTC time, sandwiched between two polls of the system clock
        so we can bound any error. */
 
-    SCH_GetFileReadyTime(&sys_time, NULL);
+    SCH_GetLastEventTime(&sys_time, NULL, NULL);
 
     status = ioctl(fd, RTC_RD_TIME, &rtc_raw);
     if (status < 0) {
@@ -934,7 +918,7 @@ RTC_Linux_TimePreInit(void)
   time_t rtc_t, estimated_correct_rtc_t;
   long interval;
   double accumulated_error = 0.0;
-  struct timeval new_sys_time;
+  struct timeval new_sys_time, old_sys_time;
 
   coefs_file_name = CNF_GetRtcFile();
 
@@ -969,8 +953,6 @@ RTC_Linux_TimePreInit(void)
         accumulated_error = file_ref_offset + (double)(interval) * 1.0e-6 * file_rate_ppm;
 
         /* Correct time */
-        LOG(LOGS_INFO, LOGF_RtcLinux, "Set system time, error in RTC = %f",
-            accumulated_error);
         estimated_correct_rtc_t = rtc_t - (long)(0.5 + accumulated_error);
       } else {
         estimated_correct_rtc_t = rtc_t - (long)(0.5 + accumulated_error);
@@ -979,9 +961,18 @@ RTC_Linux_TimePreInit(void)
       new_sys_time.tv_sec = estimated_correct_rtc_t;
       new_sys_time.tv_usec = 0;
 
-      /* Tough luck if this fails */
-      if (settimeofday(&new_sys_time, NULL) < 0) {
-        LOG(LOGS_WARN, LOGF_RtcLinux, "Could not settimeofday");
+      /* Set system time only if the step is larger than 1 second */
+      if (!(gettimeofday(&old_sys_time, NULL) < 0) &&
+          (old_sys_time.tv_sec - new_sys_time.tv_sec > 1 ||
+           old_sys_time.tv_sec - new_sys_time.tv_sec < -1)) {
+
+        LOG(LOGS_INFO, LOGF_RtcLinux, "Set system time, error in RTC = %f",
+            accumulated_error);
+
+        /* Tough luck if this fails */
+        if (settimeofday(&new_sys_time, NULL) < 0) {
+          LOG(LOGS_WARN, LOGF_RtcLinux, "Could not settimeofday");
+        }
       }
     } else {
       LOG(LOGS_WARN, LOGF_RtcLinux, "Could not convert RTC reading to seconds since 1/1/1970");
@@ -1044,6 +1035,11 @@ RTC_Linux_Trim(void)
     n_samples = 0;
     operating_mode = OM_AFTERTRIM;
 
+    /* Estimate the offset in case writertc is called or chronyd
+       is terminated during rapid sampling */
+    coef_seconds_fast = -now.tv_usec / 1e6 + 0.5;
+    coef_ref_time = now.tv_sec;
+
     /* And start rapid sampling, interrupts on now */
     if (timeout_running) {
       SCH_RemoveTimeout(timeout_id);
@@ -1055,7 +1051,3 @@ RTC_Linux_Trim(void)
   return 1;
   
 }
-
-/* ================================================== */
-
-#endif /* defined LINUX */

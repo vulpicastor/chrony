@@ -94,7 +94,7 @@ static int n_sources;
 static int n_started_sources;
 static int n_completed_sources;
 
-static int init_slew_threshold = -1;
+static double init_slew_threshold;
 
 union sockaddr_in46 {
   struct sockaddr_in in4;
@@ -143,7 +143,6 @@ static SCH_TimeoutID source_start_timeout_id;
 void
 ACQ_Initialise(void)
 {
-  return;
 }
 
 
@@ -152,7 +151,6 @@ ACQ_Initialise(void)
 void
 ACQ_Finalise(void)
 {
-  return;
 }
 
 /* ================================================== */
@@ -201,7 +199,7 @@ prepare_socket(int family)
     }
 
     if (bind(sock_fd, &my_addr.u, addrlen) < 0) {
-      LOG(LOGS_ERR, LOGF_Acquire, "Could not bind socket : %s\n", strerror(errno));
+      LOG(LOGS_ERR, LOGF_Acquire, "Could not bind socket : %s", strerror(errno));
       /* but keep running */
     }
   }
@@ -240,8 +238,6 @@ finalise_io(void)
   }
   sock_fd6 = -1;
 #endif
-
-  return;
 }
 
 /* ================================================== */
@@ -256,6 +252,7 @@ probe_source(SourceRecord *src)
   union sockaddr_in46 his_addr;
   int sock_fd;
   socklen_t addrlen;
+  uint32_t ts_fuzz;
 
 #if 0
   printf("Sending probe to %s sent=%d samples=%d\n", UTI_IPToString(&src->ip_addr), src->n_probes_sent, src->n_samples);
@@ -268,8 +265,8 @@ probe_source(SourceRecord *src)
   pkt.stratum = 0;
   pkt.poll = 4;
   pkt.precision = -6; /* as ntpdate */
-  pkt.root_delay = double_to_int32(1.0); /* 1 second */
-  pkt.root_dispersion = double_to_int32(1.0); /* likewise */
+  pkt.root_delay = UTI_DoubleToInt32(1.0); /* 1 second */
+  pkt.root_dispersion = UTI_DoubleToInt32(1.0); /* likewise */
   pkt.reference_id = 0;
   pkt.reference_ts.hi = 0; /* Set to 0 */
   pkt.reference_ts.lo = 0; /* Set to 0 */
@@ -304,8 +301,9 @@ probe_source(SourceRecord *src)
   }
 
 
+  ts_fuzz = UTI_GetNTPTsFuzz(LCL_GetSysPrecisionAsLog());
   LCL_ReadCookedTime(&cooked, NULL);
-  UTI_TimevalToInt64(&cooked, &pkt.transmit_ts);
+  UTI_TimevalToInt64(&cooked, &pkt.transmit_ts, ts_fuzz);
 
   if (sendto(sock_fd, (void *) &pkt, NTP_NORMAL_PACKET_SIZE,
              0,
@@ -320,8 +318,6 @@ probe_source(SourceRecord *src)
   ++(src->n_dead_probes);
   src->timer_running = 1;
   src->timeout_id = SCH_AddTimeoutByDelay(RETRANSMISSION_TIMEOUT, transmit_timeout, (void *) src);
-
-  return;
 }
 
 /* ================================================== */
@@ -397,8 +393,8 @@ process_receive(NTP_Packet *msg, SourceRecord *src, struct timeval *now)
     return;
   }
 
-  root_delay = int32_to_double(msg->root_delay);
-  root_dispersion = int32_to_double(msg->root_dispersion);
+  root_delay = UTI_Int32ToDouble(msg->root_delay);
+  root_dispersion = UTI_Int32ToDouble(msg->root_dispersion);
 
   UTI_Int64ToTimeval(&src->last_tx, &local_orig);
   UTI_Int64ToTimeval(&msg->receive_ts, &remote_rx);
@@ -453,7 +449,7 @@ read_from_socket(void *anything)
   his_addr_len = sizeof(his_addr);
 
   /* Get timestamp */
-  SCH_GetFileReadyTime(&now, NULL);
+  SCH_GetLastEventTime(&now, NULL, NULL);
 
   sock_fd = (long)anything;
   status = recvfrom (sock_fd, (char *)&msg, message_length, flags,
@@ -699,7 +695,7 @@ process_measurements(void)
        the system clock is fast of the reference, i.e. it needs to be
        stepped backwards. */
 
-    if (fabs(estimated_offset) > (double) init_slew_threshold) {
+    if (fabs(estimated_offset) > init_slew_threshold) {
       LOG(LOGS_INFO, LOGF_Acquire, "System's initial offset : %.6f seconds %s of true (step)",
           fabs(estimated_offset),
           (estimated_offset >= 0) ? "fast" : "slow");
@@ -708,7 +704,7 @@ process_measurements(void)
       LOG(LOGS_INFO, LOGF_Acquire, "System's initial offset : %.6f seconds %s of true (slew)",
           fabs(estimated_offset),
           (estimated_offset >= 0) ? "fast" : "slow");
-      LCL_AccumulateOffset(estimated_offset);
+      LCL_AccumulateOffset(estimated_offset, 0.0);
     }
 
   } else {
@@ -751,10 +747,11 @@ start_source_timeout_handler(void *not_used)
 /* ================================================== */
 
 void
-ACQ_StartAcquisition(int n, IPAddr *ip_addrs, int threshold, void (*after_hook)(void *), void *anything)
+ACQ_StartAcquisition(int n, IPAddr *ip_addrs, double threshold, void (*after_hook)(void *), void *anything)
 {
 
   int i, ip4, ip6;
+  int k, duplicate_ip;
 
   saved_after_hook = after_hook;
   saved_after_hook_anything = anything;
@@ -763,26 +760,37 @@ ACQ_StartAcquisition(int n, IPAddr *ip_addrs, int threshold, void (*after_hook)(
 
   n_started_sources = 0;
   n_completed_sources = 0;
-  n_sources = n;
+  n_sources = 0;
   sources = MallocArray(SourceRecord, n);
 
   for (i = ip4 = ip6 = 0; i < n; i++) {
-    sources[i].ip_addr = ip_addrs[i];
-    sources[i].n_samples = 0;
-    sources[i].n_total_samples = 0;
-    sources[i].n_dead_probes = 0;
-    if (ip_addrs[i].family == IPADDR_INET4)
-      ip4++;
-    else if (ip_addrs[i].family == IPADDR_INET6)
-      ip6++;
+    /* check for duplicate IP addresses and ignore them */
+    duplicate_ip = 0;
+    for (k = 0; k < i; k++) {
+      duplicate_ip |= UTI_CompareIPs(&(sources[k].ip_addr),
+                                     &ip_addrs[i],
+                                     NULL) == 0;
+    }
+    if (!duplicate_ip) {
+      sources[n_sources].ip_addr = ip_addrs[i];
+      sources[n_sources].n_samples = 0;
+      sources[n_sources].n_total_samples = 0;
+      sources[n_sources].n_dead_probes = 0;
+      if (ip_addrs[i].family == IPADDR_INET4)
+        ip4++;
+      else if (ip_addrs[i].family == IPADDR_INET6)
+        ip6++;
+      n_sources++;
+    } else {
+      LOG(LOGS_WARN, LOGF_Acquire, "Ignoring duplicate source: %s",
+          UTI_IPToString(&ip_addrs[i]));
+    }
   }
 
   initialise_io((ip4 && ip6) ? IPADDR_UNSPEC : (ip4 ? IPADDR_INET4 : IPADDR_INET6));
 
   /* Start sampling first source */
   start_next_source();
-
-  return;
 }
 
 /* ================================================== */

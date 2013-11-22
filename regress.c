@@ -28,11 +28,7 @@
 
 #include "config.h"
 
-#include <assert.h>
-#include <math.h>
-
-#include <stdio.h>
-#include <string.h>
+#include "sysincl.h"
 
 #include "regress.h"
 #include "logging.h"
@@ -103,8 +99,6 @@ RGR_WeightedRegression
   *sb0 = sqrt(*s2 / W + aa * aa);
 
   *s2 *= (n / W); /* Giving weighted average of variances */
-
-  return;
 }
 
 /* ================================================== */
@@ -228,6 +222,9 @@ RGR_FindBestRegression
  int m,                         /* number of extra samples in x and y arrays
                                    (negative index) which can be used to
                                    extend runs test */
+ int min_samples,               /* minimum number of samples to be kept after
+                                   changing the starting index to pass the runs
+                                   test */
 
  /* And now the results */
 
@@ -299,10 +296,12 @@ RGR_FindBestRegression
     /* Count number of runs */
     nruns = n_runs_from_residuals(resid, n - resid_start); 
 
-    if (nruns > critical_runs[n - resid_start] || n - start <= MIN_SAMPLES_FOR_REGRESS) {
-      if (resid_start < 0) {
+    if (nruns > critical_runs[n - resid_start] ||
+        n - start <= MIN_SAMPLES_FOR_REGRESS ||
+        n - start <= min_samples) {
+      if (start != resid_start) {
         /* Ignore extra samples in returned nruns */
-        nruns = n_runs_from_residuals(resid - resid_start, n); 
+        nruns = n_runs_from_residuals(resid - resid_start + start, n - start);
       }
       break;
     } else {
@@ -422,7 +421,7 @@ find_ordered_entry(double *x, int n, int index)
 {
   int flags[MAX_POINTS];
 
-  bzero(flags, n * sizeof(int));
+  memset(flags, 0, n * sizeof(int));
   return find_ordered_entry_with_flags(x, n, index, flags);
 }
 #endif
@@ -588,7 +587,7 @@ RGR_FindBestRobustRegression
        Estimate standard deviation of b and expand range about b based
        on that. */
     sb = sqrt(s2 * W/V);
-    if (sb > 0.0) {
+    if (sb > tol) {
       incr = 3.0 * sb;
     } else {
       incr = 3.0 * tol;
@@ -598,6 +597,11 @@ RGR_FindBestRobustRegression
     bhi = b;
 
     do {
+      /* Make sure incr is significant to blo and bhi */
+      while (bhi + incr == bhi || blo - incr == blo) {
+        incr *= 2;
+      }
+
       blo -= incr;
       bhi += incr;
       
@@ -605,8 +609,8 @@ RGR_FindBestRobustRegression
       eval_robust_residual(x + start, y + start, n_points, blo, &a, &rlo);
       eval_robust_residual(x + start, y + start, n_points, bhi, &a, &rhi);
 
-    } while (rlo * rhi > 0.0); /* fn vals have same sign, i.e. root not
-                                  in interval. */
+    } while (rlo * rhi >= 0.0); /* fn vals have same sign or one is zero,
+                                   i.e. root not in interval (rlo, rhi). */
 
     /* OK, so the root for b lies in (blo, bhi). Start bisecting */
     do {
@@ -623,7 +627,7 @@ RGR_FindBestRobustRegression
       } else {
         assert(0);
       }
-    } while ((bhi - blo) > tol);
+    } while ((bhi - blo) > tol && (bmid - blo) * (bhi - bmid) > 0.0);
 
     *b0 = a;
     *b1 = bmid;
