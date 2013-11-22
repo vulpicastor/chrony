@@ -3,7 +3,7 @@ Section: admin
 Priority: extra
 Maintainer: John G. Hasler <jhasler@debian.org>
 Standards-Version: 3.9.2
-Build-Depends: debhelper (>= 8), libedit-dev, texinfo, bison
+Build-Depends: debhelper (>= 8), libedit-dev, texinfo, bison, dpkg-dev (>= 1.16.1~)
 Homepage: http://chrony.tuxfamily.org
 
 Package: chrony

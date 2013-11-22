@@ -1,3 +1,38 @@
+chrony (1.26-2) unstable; urgency=low
+
+  * Fixed Makefile.in so that getdate.c gets made (and removed
+    in "clean").  This will go upstream.  Moved faq stuff in rules
+    from binary-indep to binary-arch.
+  * Restored accidently deleted nmu changelog entry.
+  
+  * Applied patch from Moritz Muehlenhoff <jmm@debian.org>
+    Closes: #655123 Please enabled hardened build flags
+
+  * Fixed upstream.
+    Closes: #518385 Chrony segfaults on startup (narrowed down to
+    chronyc and "burst")
+  
+  * Added DEB_BUILD_OPTIONS=noopt to rules.
+    Added build-arch and build-indep to rules.
+    Prefix is now 'usr'.
+    Changed to dh_installman.
+    Fixed "clean:" target.
+    Closes: #479389 Improvements for debian/rules
+  
+  * Fixed upstream.
+    Closes: #195620 Strange "System time : xxx seconds slow of NTP time"
+    output
+  
+  * Upstream changes should have fixed this.  
+    Closes:#294030 chronyd makes the whole system briefly (< 1 second) 
+    freeze
+  
+  * Fixed by upstream changes and new LSB headers.
+    Closes: #407466 Chrony won't access hardware clock but prevents 
+    hwclock from doing so either
+  
+ -- John G. Hasler <jhasler@debian.org>  Sun, 01 Jul 2012 22:05:56 -0500
+
 chrony (1.26-1) unstable; urgency=low
 
   * New upstream release
@@ -23,7 +58,19 @@ chrony (1.26-1) unstable; urgency=low
     Closes: #600403 Fix init check with PPP connection.
   
  -- John G. Hasler <jhasler@debian.org>  Sun, 17 Jun 2012 21:55:47 -0500
+  
+chrony (1.24-3.1) unstable; urgency=low
 
+  * Non-maintainer upload.
+  * Add patch (directly over the source...), to work with kernels > 3.0.0,
+    by Paul Martin at http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=628919#15.
+    (Closes: #628919)
+  * Fix readline build-depends from "libreadline5-dev | libreadline-dev" to
+    libreadline-gplv2-dev because chrony is GPLv2 only.  (Closes: #634447)
+  * Update copyright file to say that chrony is GPLv2 only. (Closes: #637526)
+
+ -- Ana Beatriz Guerrero Lopez <ana@debian.org>  Fri, 12 Aug 2011 12:32:26 +0200
+  
 chrony (1.24-3) unstable; urgency=high
 
   * Applied (modifed) patch from Gregor Herrmann.

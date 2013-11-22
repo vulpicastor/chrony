@@ -3,7 +3,7 @@
 # Written by Miquel van Smoorenburg <miquels@drinkel.ow.org>.
 # Modified for Debian GNU/Linux by Ian Murdock <imurdock@gnu.ai.mit.edu>.
 # Modified for Debian by Christoph Lameter <clameter@debian.org>
-# Modified for chrony by John Hasler <jhasler@debian.org> 1998-2010
+# Modified for chrony by John Hasler <jhasler@debian.org> 1998-2012
 
 ### BEGIN INIT INFO
 # Provides:          chrony
