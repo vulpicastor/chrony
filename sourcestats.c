@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011-2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -43,9 +43,16 @@
    to store per source */
 #define MAX_SAMPLES 64
 
+/* User defined maximum and minimum number of samples */
+int max_samples;
+int min_samples;
+
 /* This is the assumed worst case bound on an unknown frequency,
    2000ppm, which would be pretty bad */
 #define WORST_CASE_FREQ_BOUND (2000.0/1.0e6)
+
+/* The minimum allowed skew */
+#define MIN_SKEW 1.0e-12
 
 /* ================================================== */
 
@@ -160,6 +167,8 @@ SST_Initialise(void)
   logfileid = CNF_GetLogStatistics() ? LOG_FileOpen("statistics",
       "   Date (UTC) Time     IP Address    Std dev'n Est offset  Offset sd  Diff freq   Est skew  Stress  Ns  Bs  Nr")
     : -1;
+  max_samples = CNF_GetMaxSamples();
+  min_samples = CNF_GetMinSamples();
 }
 
 /* ================================================== */
@@ -204,7 +213,6 @@ void
 SST_DeleteInstance(SST_Stats inst)
 {
   Free(inst);
-  return;
 }
 
 /* ================================================== */
@@ -239,8 +247,18 @@ SST_AccumulateSample(SST_Stats inst, struct timeval *sample_time,
 {
   int n, m;
 
-  if (inst->n_samples == MAX_SAMPLES) {
+  /* Make room for the new sample */
+  if (inst->n_samples > 0 &&
+      (inst->n_samples == MAX_SAMPLES || inst->n_samples == max_samples)) {
     prune_register(inst, 1);
+  }
+
+  /* Make sure it's newer than the last sample */
+  if (inst->n_samples &&
+      UTI_CompareTimevals(&inst->sample_times[inst->last_sample], sample_time) >= 0) {
+    LOG(LOGS_WARN, LOGF_SourceStats, "Out of order sample detected, discarding history for %s",
+        inst->ip_addr ? UTI_IPToString(inst->ip_addr) : UTI_RefidToString(inst->refid));
+    prune_register(inst, inst->n_samples);
   }
 
   n = inst->last_sample = (inst->last_sample + 1) %
@@ -250,7 +268,7 @@ SST_AccumulateSample(SST_Stats inst, struct timeval *sample_time,
   inst->sample_times[n] = *sample_time;
   inst->offsets[n] = offset;
   inst->orig_offsets[m] = offset;
-  inst->peer_delays[m] = fabs(peer_delay);
+  inst->peer_delays[m] = peer_delay;
   inst->peer_dispersions[m] = peer_dispersion;
   inst->root_delays[m] = root_delay;
   inst->root_dispersions[m] = root_dispersion;
@@ -326,7 +344,7 @@ find_best_sample_index(SST_Stats inst, double *times_back)
     elapsed = -times_back[i];
     assert(elapsed >= 0.0);
 
-    root_distance = inst->root_dispersions[j] + elapsed * inst->skew + 0.5 * fabs(inst->root_delays[j]);
+    root_distance = inst->root_dispersions[j] + elapsed * inst->skew + 0.5 * inst->root_delays[j];
     if (root_distance < best_root_distance) {
       best_root_distance = root_distance;
       best_index = i;
@@ -339,8 +357,6 @@ find_best_sample_index(SST_Stats inst, double *times_back)
 #if 0
   LOG(LOGS_INFO, LOGF_SourceStats, "n=%d best_index=%d", n, best_index);
 #endif
-
-  return;
 }
 
 /* ================================================== */
@@ -422,6 +438,7 @@ SST_DoNewRegression(SST_Stats inst)
   inst->regression_ok = RGR_FindBestRegression(times_back + inst->runs_samples,
                                          offsets + inst->runs_samples, weights,
                                          inst->n_samples, inst->runs_samples,
+                                         min_samples,
                                          &est_intercept, &est_slope, &est_var,
                                          &est_intercept_sd, &est_slope_sd,
                                          &best_start, &nruns, &degrees_of_freedom);
@@ -438,6 +455,9 @@ SST_DoNewRegression(SST_Stats inst)
     inst->estimated_offset_sd = est_intercept_sd;
     inst->variance = est_var;
     inst->nruns = nruns;
+
+    if (inst->skew < MIN_SKEW)
+      inst->skew = MIN_SKEW;
 
     stress = fabs(old_freq - inst->estimated_frequency) / old_skew;
 
@@ -483,38 +503,6 @@ SST_DoNewRegression(SST_Stats inst)
 }
 
 /* ================================================== */
-
-void
-SST_GetReferenceData(SST_Stats inst, struct timeval *now, 
-                     int *stratum, double *offset,
-                     double *root_delay, double *root_dispersion,
-                     double *frequency, double *skew)
-{
-
-  double elapsed;
-  int i, j;
-
-  *frequency = inst->estimated_frequency;
-  *skew = inst->skew;
-
-  i = get_runsbuf_index(inst, inst->best_single_sample);
-  j = get_buf_index(inst, inst->best_single_sample);
-
-  UTI_DiffTimevalsToDouble(&elapsed, now, &inst->sample_times[i]);
-  *root_delay = inst->root_delays[j];
-  *root_dispersion = inst->root_dispersions[j] + elapsed * inst->skew;
-  *offset = inst->offsets[i] + elapsed * inst->estimated_frequency;
-  *stratum = inst->strata[j];
-
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d freq=%f skew=%f del=%f disp=%f ofs=%f str=%d",
-      inst->n_samples, *frequency, *skew, *root_delay, *root_dispersion, *offset, *stratum);
-#endif
-
-  return;
-}
-
-/* ================================================== */
 /* Return the assumed worst case range of values that this source's
    frequency lies within.  Frequency is defined as the amount of time
    the local clock gains relative to the source per unit local clock
@@ -528,59 +516,63 @@ SST_GetFrequencyRange(SST_Stats inst,
   skew = inst->skew;
   *lo = freq - skew;
   *hi = freq + skew;
-}
 
-/* ================================================== */
+  /* This function is currently used only to determine the values of delta
+     and epsilon in the ntp_core module. Limit the skew to a reasonable maximum
+     to avoid failing the dispersion test too easily. */
+  if (skew > WORST_CASE_FREQ_BOUND) {
+    *lo = -WORST_CASE_FREQ_BOUND;
+    *hi = WORST_CASE_FREQ_BOUND;
+  }
+}
 
 /* ================================================== */
 
 void
 SST_GetSelectionData(SST_Stats inst, struct timeval *now,
                      int *stratum,
-                     double *best_offset, double *best_root_delay,
-                     double *best_root_dispersion,
+                     double *offset_lo_limit,
+                     double *offset_hi_limit,
+                     double *root_distance,
                      double *variance, int *select_ok)
 {
-  double average_offset;
-  double sample_elapsed;
-  double elapsed;
+  double offset, sample_elapsed;
   int i, j;
-  int average_ok;
-  double peer_distance;
   
   i = get_runsbuf_index(inst, inst->best_single_sample);
   j = get_buf_index(inst, inst->best_single_sample);
 
-  *stratum = inst->strata[j];
+  *stratum = inst->strata[get_buf_index(inst, inst->n_samples - 1)];
   *variance = inst->variance;
 
-  peer_distance = inst->peer_dispersions[j] + 0.5 * inst->peer_delays[j];
-  UTI_DiffTimevalsToDouble(&elapsed, now, &(inst->offset_time));
-
   UTI_DiffTimevalsToDouble(&sample_elapsed, now, &inst->sample_times[i]);
-  *best_offset = inst->offsets[i] + sample_elapsed * inst->estimated_frequency;
-  *best_root_delay = inst->root_delays[j];
-  *best_root_dispersion = inst->root_dispersions[j] + sample_elapsed * inst->skew;
+  offset = inst->offsets[i] + sample_elapsed * inst->estimated_frequency;
+  *root_distance = 0.5 * inst->root_delays[j] +
+    inst->root_dispersions[j] + sample_elapsed * inst->skew;
 
+  *offset_lo_limit = offset - *root_distance;
+  *offset_hi_limit = offset + *root_distance;
+
+#if 0
+  double average_offset, elapsed;
+  int average_ok;
   /* average_ok ignored for now */
+  UTI_DiffTimevalsToDouble(&elapsed, now, &(inst->offset_time));
   average_offset = inst->estimated_offset + inst->estimated_frequency * elapsed;
-  if (fabs(average_offset - *best_offset) <= peer_distance) {
+  if (fabs(average_offset - offset) <=
+      inst->peer_dispersions[j] + 0.5 * inst->peer_delays[j]) {
     average_ok = 1;
   } else {
     average_ok = 0;
   }
+#endif
 
   *select_ok = inst->regression_ok;
 
 #ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d off=%f del=%f dis=%f var=%f pdist=%f avoff=%f avok=%d selok=%d",
-      inst->n_samples, *best_offset, *best_root_delay, *best_root_dispersion, *variance,
-      peer_distance, average_offset, average_ok, *select_ok);
-#else
-  (void)average_ok;
+  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d off=%f dist=%f var=%f selok=%d",
+      inst->n_samples, offset, *root_distance, *variance, *select_ok);
 #endif
-
-  return;
 }
 
 /* ================================================== */
@@ -660,8 +652,6 @@ SST_SlewSamples(SST_Stats inst, struct timeval *when, double dfreq, double doffs
 #else
   (void)prev; (void)prev_freq;
 #endif
-
-  return;
 }
 
 /* ================================================== */

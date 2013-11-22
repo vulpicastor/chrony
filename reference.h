@@ -105,10 +105,12 @@ extern void REF_SetReference
 (
  int stratum,
  NTP_Leap leap,
+ int combined_sources,
  uint32_t ref_id,
  IPAddr *ref_ip,
  struct timeval *ref_time,
  double offset,
+ double offset_sd,
  double frequency,
  double skew,
  double root_delay,

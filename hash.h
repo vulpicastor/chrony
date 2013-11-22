@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -19,27 +19,23 @@
  * 
  **********************************************************************
 
-  ======================================================================
+  =======================================================================
+
+  Header file for crypto hashing.
 
   */
 
-#ifndef _GOT_RTC_LINUX_H
-#define _GOT_RTC_LINUX_H
+#ifndef GOT_HASH_H
+#define GOT_HASH_H
 
-#include "reports.h"
+/* length of hash values produced by SHA512 */
+#define MAX_HASH_LENGTH 64
 
-extern int RTC_Linux_Initialise(void);
-extern void RTC_Linux_Finalise(void);
-extern void RTC_Linux_TimePreInit(void);
-extern void RTC_Linux_TimeInit(void (*after_hook)(void *), void *anything);
-extern void RTC_Linux_StartMeasurements(void);
+extern int HSH_GetHashId(const char *name);
 
-/* 0=success, 1=no driver, 2=can't write file */
-extern int RTC_Linux_WriteParameters(void);
+extern unsigned int HSH_Hash(int id,
+    const unsigned char *in1, unsigned int in1_len,
+    const unsigned char *in2, unsigned int in2_len,
+    unsigned char *out, unsigned int out_len);
 
-extern int RTC_Linux_GetReport(RPT_RTC_Report *report);
-extern int RTC_Linux_Trim(void);
-
-extern void RTC_Linux_CycleLogFile(void);
-
-#endif /* _GOT_RTC_LINUX_H */
+#endif

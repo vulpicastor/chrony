@@ -4,7 +4,7 @@
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
  * Copyright (C) John G. Hasler  2009
- * Copyright (C) Miroslav Lichvar  2009-2011
+ * Copyright (C) Miroslav Lichvar  2009-2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -29,14 +29,8 @@
 
 #include "config.h"
 
-#ifdef LINUX
+#include "sysincl.h"
 
-#include <sys/time.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <math.h>
-#include <ctype.h>
-#include <assert.h>
 #include <sys/utsname.h>
 
 #if defined(HAVE_SCHED_SETSCHEDULER)
@@ -115,6 +109,9 @@ static int have_readonly_adjtime;
    adjustments. */
 static int have_nanopll;
 
+/* Flag indicating whether adjtimex() can step the clock */
+static int have_setoffset;
+
 /* ================================================== */
 
 static void handle_end_of_slew(void *anything);
@@ -171,6 +168,9 @@ static SCH_TimeoutID slew_timeout_id;
    a fast slew */
 static double delta_total_tick;
 
+/* Maximum length of one fast slew */
+#define MAX_FASTSLEW_TIMEOUT (3600 * 24 * 7)
+
 /* Max amount of time that we wish to slew by using adjtime (or its
    equivalent).  If more than this is outstanding, we alter the value
    of tick instead, for a set period.  Set this according to the
@@ -179,7 +179,7 @@ static double delta_total_tick;
 #define MAX_ADJUST_WITH_ADJTIME (0.2)
 
 /* Max amount of time that should be adjusted by kernel PLL */
-#define MAX_ADJUST_WITH_NANOPLL (1.0e-5)
+#define MAX_ADJUST_WITH_NANOPLL (0.5)
 
 /* The amount by which we alter 'tick' when doing a large slew */
 static int slew_delta_tick;
@@ -205,6 +205,18 @@ static double fast_slew_error;
 
 /* The rate at which frequency and tick values are updated in kernel. */
 static int tick_update_hz;
+
+#define MIN_PLL_TIME_CONSTANT 0
+#define MAX_PLL_TIME_CONSTANT 10
+
+/* PLL time constant used when adjusting offset by PLL */
+static long pll_time_constant;
+
+/* Suggested offset correction rate (correction time * offset) */
+static double correction_rate;
+
+/* Kernel time constant shift */
+static int shift_pll;
 
 /* ================================================== */
 /* These routines are used to estimate maximum error in offset correction */
@@ -266,9 +278,8 @@ update_nano_slew_error(long offset, int new)
   if (offset == 0 && nano_slew_error == 0)
     return;
 
-  /* maximum error in offset reported by adjtimex, assuming PLL constant 0 
-     and SHIFT_PLL = 2 */
-  offset /= new ? 4 : 3;
+  /* maximum error in offset reported by adjtimex */
+  offset /= (1 << (shift_pll + pll_time_constant)) - (new ? 0 : 1);
   if (offset < 0)
     offset = -offset;
 
@@ -338,6 +349,27 @@ get_fast_slew_error(struct timeval *now)
 }
 
 /* ================================================== */
+/* Select PLL time constant according to the suggested correction rate. */
+
+static long
+get_pll_constant(double offset)
+{
+  long c;
+  double corr_time;
+ 
+  if (offset < 1e-9)
+    return MIN_PLL_TIME_CONSTANT;
+
+  corr_time = correction_rate / offset;
+
+  for (c = MIN_PLL_TIME_CONSTANT; c < MAX_PLL_TIME_CONSTANT; c++)
+    if (corr_time < 1 << (c + 1 + shift_pll))
+      break;
+
+  return c;
+}
+
+/* ================================================== */
 /* This routine stops a fast slew, determines how long the slew has
    been running for, and consequently how much adjustment has actually
    been applied. It can be used both when a slew finishes naturally
@@ -381,7 +413,8 @@ stop_fast_slew(void)
 }
 
 /* ================================================== */
-/* This routine reschedules fast slew timeout after frequency was changed */
+/* This routine reschedules fast slew timeout according
+   to the current frequency and offset */
 
 static void
 adjust_fast_slew(double old_tick, double old_delta_tick)
@@ -402,8 +435,8 @@ adjust_fast_slew(double old_tick, double old_delta_tick)
 
   dseconds = -offset_register * (current_total_tick + delta_total_tick) / delta_total_tick;
 
-  if (dseconds > 3600 * 24 * 7)
-    dseconds = 3600 * 24 * 7;
+  if (dseconds > MAX_FASTSLEW_TIMEOUT)
+    dseconds = MAX_FASTSLEW_TIMEOUT;
   UTI_AddDoubleToTimeval(&tv, dseconds, &end_of_slew);
 
   slew_start_tv = tv;
@@ -450,7 +483,7 @@ initiate_slew(void)
     update_nano_slew_error(offset, 0);
 
     offset = 0;
-    if (TMX_ApplyPLLOffset(offset) < 0) {
+    if (TMX_ApplyPLLOffset(offset, MIN_PLL_TIME_CONSTANT) < 0) {
       LOG_FATAL(LOGF_SysLinux, "adjtimex() failed");
     }
     nano_slewing = 0;
@@ -458,13 +491,23 @@ initiate_slew(void)
   }
 
   if (have_nanopll && fabs(offset_register) < MAX_ADJUST_WITH_NANOPLL) {
-    /* Use PLL with fixed frequency to do the shift */
+    /* Use the PLL with fixed frequency to do the shift. Until the kernel has a
+       support for linear offset adjustments with programmable rate this is the
+       best we can do. */
     offset = 1.0e9 * -offset_register;
 
-    if (TMX_ApplyPLLOffset(offset) < 0) {
+    /* First adjustment after accrue_offset() sets the PLL time constant */
+    if (pll_time_constant < 0) {
+      pll_time_constant = get_pll_constant(fabs(offset_register));
+    }
+
+    assert(pll_time_constant >= MIN_PLL_TIME_CONSTANT &&
+        pll_time_constant <= MAX_PLL_TIME_CONSTANT);
+
+    if (TMX_ApplyPLLOffset(offset, pll_time_constant) < 0) {
       LOG_FATAL(LOGF_SysLinux, "adjtimex() failed");
     }
-    offset_register = 0.0;
+    offset_register = 0.0; /* Don't keep the sub-nanosecond leftover */
     nano_slewing = 1;
     update_nano_slew_error(offset, 1);
   } else if (fabs(offset_register) < MAX_ADJUST_WITH_ADJTIME) {
@@ -539,9 +582,8 @@ initiate_slew(void)
     fast_slewing = 1;
     slew_start_tv = T0;
 
-    /* Set up timeout for end of slew, limit to one week */
-    if (dseconds > 3600 * 24 * 7)
-      dseconds = 3600 * 24 * 7;
+    if (dseconds > MAX_FASTSLEW_TIMEOUT)
+      dseconds = MAX_FASTSLEW_TIMEOUT;
     UTI_AddDoubleToTimeval(&T0, dseconds, &end_of_slew);
 
     slew_timeout_id = SCH_AddTimeout(&end_of_slew, handle_end_of_slew, NULL);
@@ -550,8 +592,6 @@ initiate_slew(void)
     offset_register = 0.0;
 
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -587,16 +627,21 @@ abort_slew(void)
    time) */
 
 static void
-accrue_offset(double offset)
+accrue_offset(double offset, double corr_rate)
 {
   /* Add the new offset to the register */
   offset_register += offset;
 
+  correction_rate = corr_rate;
+
+  /* Select a new time constant on the next adjustment */
+  pll_time_constant = -1;
+
   if (!fast_slewing) {
     initiate_slew();
-  } /* Otherwise, when the fast slew completes, any other stuff
-       in the offset register will be applied */
-
+  } else {
+    adjust_fast_slew(current_total_tick, delta_total_tick);
+  }
 }
 
 /* ================================================== */
@@ -612,22 +657,28 @@ apply_step_offset(double offset)
     abort_slew();
   }
 
-  if (gettimeofday(&old_time, NULL) < 0) {
-    LOG_FATAL(LOGF_SysLinux, "gettimeofday() failed");
+  if (have_setoffset) {
+    if (TMX_ApplyStepOffset(-offset) < 0) {
+      LOG_FATAL(LOGF_SysLinux, "adjtimex() failed");
+    }
+  } else {
+    if (gettimeofday(&old_time, NULL) < 0) {
+      LOG_FATAL(LOGF_SysLinux, "gettimeofday() failed");
+    }
+
+    UTI_AddDoubleToTimeval(&old_time, -offset, &new_time);
+
+    if (settimeofday(&new_time, NULL) < 0) {
+      LOG_FATAL(LOGF_SysLinux, "settimeofday() failed");
+    }
+
+    if (gettimeofday(&old_time, NULL) < 0) {
+      LOG_FATAL(LOGF_SysLinux, "gettimeofday() failed");
+    }
+
+    UTI_DiffTimevalsToDouble(&err, &old_time, &new_time);
+    lcl_InvokeDispersionNotifyHandlers(fabs(err));
   }
-
-  UTI_AddDoubleToTimeval(&old_time, -offset, &new_time);
-
-  if (settimeofday(&new_time, NULL) < 0) {
-    LOG_FATAL(LOGF_SysLinux, "settimeofday() failed");
-  }
-
-  if (gettimeofday(&old_time, NULL) < 0) {
-    LOG_FATAL(LOGF_SysLinux, "gettimeofday() failed");
-  }
-
-  UTI_DiffTimevalsToDouble(&err, &old_time, &new_time);
-  lcl_InvokeDispersionNotifyHandlers(fabs(err));
 
   initiate_slew();
 
@@ -797,8 +848,6 @@ get_offset_correction(struct timeval *raw,
     update_nano_slew_error(noffset, 0);
     *err = get_slow_slew_error(raw) + get_fast_slew_error(raw) + get_nano_slew_error();;
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -812,8 +861,6 @@ set_leap(int leap)
 
   LOG(LOGS_INFO, LOGF_SysLinux, "System clock status set to %s leap second",
      leap ? (leap > 0 ? "insert" : "delete") : "not insert/delete");
-
-  return;
 }
 
 /* ================================================== */
@@ -851,7 +898,6 @@ guess_hz_and_shift_hz(int tick, int *hz, int *shift_hz)
   /* oh dear.  doomed. */
   *hz = 0;
   *shift_hz = 0;
-  return;
 }
 
 /* ================================================== */
@@ -996,8 +1042,9 @@ get_version_specific_details(void)
     }
   }
 
-  /* ADJ_OFFSET_SS_READ support */
-  if (kernelvercmp(major, minor, patch, 2, 6, 27) < 0) {
+  /* ADJ_OFFSET_SS_READ support. It's available since 2.6.24,
+     but was buggy until 2.6.28. */
+  if (kernelvercmp(major, minor, patch, 2, 6, 28) < 0) {
     have_readonly_adjtime = 0;
   } else {
     have_readonly_adjtime = 1;
@@ -1010,14 +1057,28 @@ get_version_specific_details(void)
     have_nanopll = 1;
   }
 
+  /* ADJ_SETOFFSET support */
+  if (kernelvercmp(major, minor, patch, 2, 6, 39) < 0) {
+    have_setoffset = 0;
+  } else {
+    have_setoffset = 1;
+  }
+
+  /* PLL time constant changed in 2.6.31 */
+  if (kernelvercmp(major, minor, patch, 2, 6, 31) < 0) {
+    shift_pll = 4;
+  } else {
+    shift_pll = 2;
+  }
+
   /* Override freq_scale if it appears in conf file */
   CNF_GetLinuxFreqScale(&set_config_freq_scale, &config_freq_scale);
   if (set_config_freq_scale) {
     freq_scale = config_freq_scale;
   }
 
-  LOG(LOGS_INFO, LOGF_SysLinux, "hz=%d shift_hz=%d freq_scale=%.8f nominal_tick=%d slew_delta_tick=%d max_tick_bias=%d",
-      hz, shift_hz, freq_scale, nominal_tick, slew_delta_tick, max_tick_bias);
+  LOG(LOGS_INFO, LOGF_SysLinux, "hz=%d shift_hz=%d freq_scale=%.8f nominal_tick=%d slew_delta_tick=%d max_tick_bias=%d shift_pll=%d",
+      hz, shift_hz, freq_scale, nominal_tick, slew_delta_tick, max_tick_bias, shift_pll);
 }
 
 /* ================================================== */
@@ -1047,6 +1108,11 @@ SYS_Linux_Initialise(void)
   if (have_nanopll && TMX_EnableNanoPLL() < 0) {
     LOG(LOGS_INFO, LOGF_SysLinux, "adjtimex() doesn't support nanosecond PLL");
     have_nanopll = 0;
+  }
+
+  if (have_setoffset && TMX_TestStepOffset() < 0) {
+    LOG(LOGS_INFO, LOGF_SysLinux, "adjtimex() doesn't support ADJ_SETOFFSET");
+    have_setoffset = 0;
   }
 
   TMX_SetSync(CNF_GetRTCSync());
@@ -1178,9 +1244,3 @@ void SYS_Linux_MemLockAll(int LockAll)
   }
 }
 #endif /* HAVE_MLOCKALL */
-
-#endif /* LINUX */
-
-/* vim:ts=8
- * */
-

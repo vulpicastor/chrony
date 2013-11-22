@@ -47,15 +47,21 @@ typedef enum {
 } CPS_Status;
 
 typedef struct {
-  IPAddr ip_addr;
   char *name;
   unsigned short port;
   SourceParameters params;
 } CPS_NTP_Source;
 
 /* Parse a command to add an NTP server or peer */
-extern CPS_Status CPS_ParseNTPSourceAdd(const char *line, CPS_NTP_Source *src);
+extern CPS_Status CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src);
   
+/* Remove extra white-space and comments */
+extern void CPS_NormalizeLine(char *line);
 
+/* Terminate first word and return pointer to the next word */
+extern char *CPS_SplitWord(char *line);
+
+/* Parse a key from keyfile */
+extern int CPS_ParseKey(char *line, unsigned long *id, const char **hash, char **key);
 
 #endif /* GOT_CMDPARSE_H */

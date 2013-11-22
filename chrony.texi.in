@@ -93,10 +93,10 @@ Data Security, Inc. MD5 Message-Digest Algorithm} for authenticating
 messages between different machines on the network.
 
 In writing the @code{chronyd} program, extensive use has been made of
-RFC1305, written by David Mills.  I have occasionally referred to the
-@code{xntp} suite's source code to check details of the protocol that
-the RFC did not make absolutely clear.  The core algorithms in
-@code{chronyd} are all completely distinct from @code{xntp}, however.
+RFC1305, written by David Mills.  The @code{ntp} suite's source code has
+been occasionally used to check details of the protocol that the RFC did
+not make absolutely clear.  The core algorithms in @code{chronyd} are
+all completely distinct from @code{ntp}, however.
 @c }}}
 @c {{{ S:Availability
 @node Availability
@@ -125,9 +125,7 @@ different quirks in its behaviour.
 
 The software is known to work in the following environments:
 @itemize @bullet
-@item Linux on i386, x86_64 and PowerPC architectures.  The software is known
-to work on Linux 2.0.x and newer.  Prior to 2.0.31, the real time clock can't
-be used.
+@item Linux 2.2 and newer
 
 @item NetBSD
 @item BSD/386
@@ -148,34 +146,50 @@ requires access to such systems to test out the driver.
 @node Other time synchronisation packages
 @section Relationship to other software packages
 @menu
-* Comparison with xntpd::       
+* Comparison with ntpd::
 * Comparison with timed::       
 @end menu
 
-@node Comparison with xntpd
-@subsection xntpd
+@node Comparison with ntpd
+@subsection ntpd
 The `reference' implementation of the Network Time Protocol is the
-program @code{xntpd}, available via
-@uref{http://www.eecis.udel.edu/~ntp, The NTP home page}.
+program @code{ntpd}, available via
+@uref{http://www.ntp.org/, The NTP home page}.
 
-@code{xntpd} is designed to support all the operating modes defined by
-RFC1305, and has driver support for a large number of reference clocks
-(such as GPS receivers) that can be connected directly to a computer,
-thereby providing a so-called 'stratum 1' server.
-
-Things @code{chronyd} can do that @code{xntpd} can't:
+One of the main differences between @code{ntpd} and @code{chronyd} is in
+the algorithms used to control the computer's clock. Things
+@code{chronyd} can do better than @code{ntpd}:
 
 @itemize @bullet
 @item
 @code{chronyd} can perform usefully in an environment where access to
-the time reference is intermittent.  @code{chronyd} estimates
-@emph{both} the current time offset @emph{and} the rate at which the
-computer's clock gains or loses time, and can use that rate estimate to
-trim the clock after the reference disappears.  @code{xntpd} corrects
-any time offset by speeding up and slowing down the computer clock, and
-so could be left with a significant rate error if the reference
-disappears whilst it is trying to correct a big offset.
+the time reference is intermittent.  @code{ntpd} needs regular polling
+of the reference to work well.
+@item
+@code{chronyd} can usually synchronise the clock faster and with better
+time accuracy.
+@item
+@code{chronyd} quickly adapts to sudden changes in the rate of the clock
+(e.g. due to changes in the temperature of the crystal oscillator).
+@code{ntpd} may need a long time to settle down again.
+@item
+@code{chronyd} can perform well even when the network is congested for
+longer periods of time.
+@item
+@code{chronyd} in the default configuration never steps the time to not
+upset other running programs.  @code{ntpd} can be configured to never
+step the time too, but it has to use a different means of adjusting the
+clock, which has some
+disadvantages.
+@item
+@code{chronyd} can adjust the rate of the clock on Linux in a larger
+range, which allows it to operate even on machines with broken or
+unstable clock (e.g. in some virtual machines).
+@end itemize
 
+Things @code{chronyd} can do that @code{ntpd} can't:
+
+@itemize @bullet
 @item
 @code{chronyd} provides support for isolated networks whether the only
 method of time correction is manual entry (e.g. by the administrator
@@ -189,33 +203,27 @@ subsequently.
 `real-time clock', i.e. the clock that maintains the time when the
 computer is turned off.  It can use this data when the system boots to
 set the system time from a corrected version of the real-time clock.
-These real-time clock facilities are only available on certain releases
-of Linux, so far.
-
-@item
-The @code{xntpd} program is supported by other programs to carry out
-certain functions.  @code{ntpdate} is used to provide an initial
-correction to the system clock based on a `one-shot' sampling of other
-NTP servers.  @code{tickadj} is used to adjust certain operating system
-parameters to make @code{xntpd} work better.  All this functionality is
-integrated into @code{chronyd}.
+These real-time clock facilities are only available on Linux, so far.
 @end itemize
 
-Things @code{xntpd} can do that @code{chronyd} can't:
+Things @code{ntpd} can do that @code{chronyd} can't:
 
 @itemize @bullet
 @item
-@code{xntpd} supports effectively all of RFC1305, including broadcast /
-multicast clients and extra encryption schemes for authenticating
-data packets.
+@code{ntpd} fully supports NTP version 4 (RFC5905), including broadcast,
+multicast, manycast clients / servers and the orphan mode.  It also
+supports extra authentication schemes based on public-key cryptography
+(RFC5906). @code{chronyd} uses NTP version 3 (RFC1305), which is
+compatible with version 4.
 
 @item
-@code{xntpd} has been ported to more types of computer / operating
-system (so far).
+@code{ntpd} has been ported to more types of computer / operating
+system.
 
 @item
-xntpd is designed to work solely with integer arithmetic (i.e. does not
-require floating point support from its host).
+@code{ntpd} includes drivers for many reference clocks. @code{chronyd}
+relies on other programs (e.g. gpsd) to access the data from the
+reference clocks.
 @end itemize
 
 @node Comparison with timed
@@ -303,9 +311,9 @@ different architectures (Alpha, Sparc, MIPS as well as x86 of course).
 
 @item Porting to Windows NT
 
-I did a small amount of work on this under Cygwin.  Only the sorting out of the
-include files has really been achieved so far.  The two main areas still to
-address are
+A small amount of work on this was done under Cygwin.  Only the sorting
+out of the include files has really been achieved so far.  The two main
+areas still to address are
 
 @enumerate
 @item The system clock driver.
@@ -560,11 +568,14 @@ customers.
 stratum 1 and stratum 2 servers.  You should find one or more servers
 that are near to you --- check that their access policy allows you to
 use their facilities.
+
+@item Use public servers from
+@uref{http://www.pool.ntp.org/, the pool.ntp.org project}.
 @end itemize
 
 Assuming that you have found some servers, you need to set up a
 configuration file to run chrony.  The (compiled-in) default location
-for this file is @file{/etc/chrony.conf}.  Assuming that your ntp
+for this file is @file{@SYSCONFDIR@/chrony.conf}.  Assuming that your ntp
 servers are called @code{a.b.c} and @code{d.e.f}, your
 @file{chrony.conf} file could contain as a minimum
 
@@ -583,9 +594,9 @@ useful configuration file would look something like
 server a.b.c
 server d.e.f
 server g.h.i
-keyfile /etc/chrony.keys
+keyfile @SYSCONFDIR@/chrony.keys
 commandkey 1
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 @end example
 @c }}}
 @c {{{ S:Infrequent connection
@@ -595,7 +606,7 @@ In this section we discuss how to configure chrony for computers that
 have occasional connections to the internet.
 
 @menu
-* Configuration for infrequent connections::  How to set up the @code{/etc/chrony} file
+* Configuration for infrequent connections::  How to set up the @code{@SYSCONFDIR@/chrony.conf} file
 * Advising chronyd of internet availability::  How to tell chronyd when the link is available
 @end menu
 
@@ -619,49 +630,35 @@ server d.e.f
 server g.h.i
 @end example
 
-However, the following issues need to be addressed:
-
-@enumerate 1
-@item
-Your computer probably doesn't have DNS access whilst offline to turn
-the machine names into IP addresses.
-@item
-Your computer will keep trying to contact the servers to obtain
+However, your computer will keep trying to contact the servers to obtain
 timestamps, even whilst offline.  If you operate a dial-on-demand
 system, things are even worse, because the link to the internet will
 keep getting established.
-@end enumerate
 
 For this reason, it would be better to specify this part of your
 configuration file in the following way:
 
 @example
-server 1.2.3.4 offline
-server 5.6.7.8 offline
-server 9.10.11.12 offline
+server a.b.c offline
+server d.e.f offline
+server g.h.i offline
 @end example
 
-Because numeric IP addresses have been used, the first problem is
-overcome.  The @code{offline} keyword indicates that the servers start
+The @code{offline} keyword indicates that the servers start
 in an offline state, and that they should not be contacted until @code{chronyd}
 receives notification that the link to the internet is present.
-
-An alternative is to use the names of the NTP servers, and put entries for them
-into your @file{/etc/hosts} file.  This will be OK as long as @samp{files}
-comes before @samp{dns} in the @samp{hosts} line of the
-@file{/etc/nsswitch.conf} file.
 
 In order to notify @code{chronyd} of the presence of the link, you will need to
 be able to log in to it with the program chronyc.  To do this, @code{chronyd}
 needs to be configured with an administrator password.  To set up an
-administrator password, you can create a file @file{/etc/chrony.keys}
+administrator password, you can create a file @file{@SYSCONFDIR@/chrony.keys}
 containing a single line
 
 @example
-1 xyzzy
+1 ALongAndRandomPassword
 @end example
 
-and add the following line to @file{/etc/chrony.conf} (the order of the
+and add the following line to @file{@SYSCONFDIR@/chrony.conf} (the order of the
 lines does not matter)
 
 @example
@@ -671,12 +668,12 @@ commandkey 1
 The smallest useful configuration file would look something like
 
 @example
-server 1.2.3.4 offline
-server 5.6.7.8 offline
-server 9.10.11.12 offline
-keyfile /etc/chrony.keys
+server a.b.c offline
+server d.e.f offline
+server g.h.i offline
+keyfile @SYSCONFDIR@/chrony.keys
 commandkey 1
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 @end example
 
 The next section describes how to tell @code{chronyd} when the internet link
@@ -685,33 +682,27 @@ goes up and down.
 @node Advising chronyd of internet availability
 @subsection How to tell chronyd when the internet link is available.
 To use this option, you will need to configure a command key in
-@code{chronyd's} configuration file @file{/etc/chrony.conf}, as described in
+@code{chronyd's} configuration file @file{@SYSCONFDIR@/chrony.conf}, as described in
 the previous section.
 
 To tell @code{chronyd} when to start and finish sampling the servers, the
 @code{online} and @code{offline} commands of chronyc need to be used.
 To give an example of their use, we assume that @code{pppd} is the
 program being used to connect to the internet, and that chronyc has been
-installed at its default location @file{/usr/local/bin/chronyc}.  We
+installed at its default location @file{@BINDIR@/chronyc}.  We
 also assume that the command key has been set up as described in the
 previous section.
 
 In the file @file{/etc/ppp/ip-up} we add the command sequence
 
 @example
-/usr/local/bin/chronyc <<EOF
-password xyzzy
-online
-EOF
+@BINDIR@/chronyc -a online
 @end example
 
 and in the file @file{/etc/ppp/ip-down} we add the sequence
 
 @example
-/usr/local/bin/chronyc <<EOF 
-password xyzzy
-offline
-EOF
+@BINDIR@/chronyc -a offline
 @end example
 
 @code{chronyd's} polling of the servers will now only occur whilst the
@@ -746,9 +737,9 @@ be (assuming the clients are in the 192.168.165.x subnet and that the
 master's address is 192.168.169.170)
 
 @example
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 commandkey 25
-keyfile /etc/chrony.keys
+keyfile @SYSCONFDIR@/chrony.keys
 initstepslew 10 client1 client3 client6
 local stratum 8
 manual
@@ -760,10 +751,10 @@ the configuration file might be
 
 @example
 server master
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 logdir /var/log/chrony
 log measurements statistics tracking
-keyfile /etc/chrony.keys
+keyfile @SYSCONFDIR@/chrony.keys
 commandkey 24
 local stratum 10
 initstepslew 20 master
@@ -833,17 +824,9 @@ compiled into the kernel).  An estimate is made of the RTC error at a
 particular RTC second, and the rate at which the RTC gains or loses time
 relative to true time.
 
-The RTC is fully supported in 2.2, 2.4 and 2.6 kernels.
-
-On 2.6 kernels, if your motherboard has a HPET, you need to enable the
+On 2.6 and later kernels, if your motherboard has a HPET, you need to enable the
 @samp{HPET_EMULATE_RTC} option in your kernel configuration.  Otherwise, chrony
 will not be able to interact with the RTC device and will give up using it.
-
-For kernels in the 2.0 series prior to 2.0.32, the kernel was set up to
-trim the RTC every 11 minutes.  This would be disasterous for
-@code{chronyd} -- there is no reliable way of synchronising with this
-trimming. For this reason, @code{chronyd} only supports the RTC in 2.0
-kernels from v2.0.32 onwards.
 
 When the computer is powered down, the measurement histories for all the
 NTP servers are saved to files (if the @code{dumponexit} directive is
@@ -895,102 +878,58 @@ option should not be used if you want your disc to spin down.
 To illustrate how a dial-up home computer might be configured, example
 configuration files are shown in this section.
 
-For the @file{/etc/chrony.conf} file, the following can be used as an
-example.  @emph{NOTE : The @code{server} directives are only applicable
-to customers of Demon Internet; users of other ISPs will need to use
-their own ISP's NTP servers or public NTP servers.}
+For the @file{@SYSCONFDIR@/chrony.conf} file, the following can be used as an
+example.
 
 @example
-server 158.152.1.65 minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 158.152.1.76 minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 194.159.253.2 minpoll 5 maxpoll 10 maxdelay 0.4 offline
+server 0.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
+server 1.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
+server 2.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
 logdir /var/log/chrony
 log statistics measurements tracking
-driftfile /etc/chrony.drift
-keyfile /etc/chrony.keys
+driftfile @CHRONYVARDIR@/drift
+keyfile @SYSCONFDIR@/chrony.keys
 commandkey 25
 maxupdateskew 100.0
 dumponexit
-dumpdir /var/log/chrony
-rtcfile /etc/chrony.rtc
+dumpdir @CHRONYVARDIR@
+rtcfile @CHRONYVARDIR@/rtc
 @end example
 
-With Freeserve as the ISP, I use the following server lines :
-
-@example
-server 194.152.64.68 minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 194.152.64.35 minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 194.152.64.34 minpoll 5 maxpoll 10 maxdelay 0.4 offline
-@end example
-
-I use @code{pppd} for connecting to my ISP.  This runs two scripts
+@code{pppd} is used for connecting to the internet.  This runs two scripts
 @file{/etc/ppp/ip-up} and @file{/etc/ppp/ip-down} when the link goes
 online and offline respectively.
 
-The relevant part of the @file{/etc/ppp/ip-up} file is (with a dummy
-password)
+The relevant part of the @file{/etc/ppp/ip-up} file is
 
 @example
-/usr/local/bin/chronyc <<EOF
-password xxxxxxxx
-online
-EOF
+@BINDIR@/chronyc -a online
 @end example
 
 and the relevant part of the @file{/etc/ppp/ip-down} script is
 
 @example
-/usr/local/bin/chronyc <<EOF
-password xxxxxxxx
-offline
-dump
-writertc
-EOF
+@BINDIR@/chronyc -a -m offline dump writertc
 @end example
 
-(Because they have to contain the administrator password, it would be
-desirable to make the files readable only by root on a multiuser
-machine).
-
-To start @code{chronyd} during the boot sequence, I have the following
-in @file{/etc/rc.d/rc.local} (this is a Slackware system)
+To start @code{chronyd} during the boot sequence, the following
+is in @file{/etc/rc.d/rc.local} (this is a Slackware system)
 
 @example
-if [ -f /usr/local/sbin/chronyd -a -f /etc/chrony.conf ]; then
-  /usr/local/sbin/chronyd -r -s
+if [ -f @SBINDIR@/chronyd -a -f @SYSCONFDIR@/chrony.conf ]; then
+  @SBINDIR@/chronyd -r -s
   echo "Start chronyd"
 fi
 @end example
 
 The placement of this command may be important on some systems.  In
-particular, @code{chronyd} may need to be started several seconds (about
-10 as a minimum) before any software that depends on the system clock
-not jumping or moving backwards, depending on the directives in
-@code{chronyd's} configuration file.
+particular, @code{chronyd} may need to be started before any software
+that depends on the system clock not jumping or moving backwards,
+depending on the directives in @code{chronyd's} configuration file.
 
 For the system shutdown, @code{chronyd} should receive a SIGTERM several
 seconds before the final SIGKILL; the SIGTERM causes the measurement
-histories and RTC information to be saved out.  There should be no need
-to add anything to the shutdown sequence, unless (as my system had)
-there is no pause between the SIGTERM and SIGKILL being delivered to the
-remaining processes.  So if you find something like
-
-@example
-killall5 -15 
-killall5 -9
-@end example
-
-in your @code{/etc/rc.d/rc.0} script, you will need to insert a sleep, e.g.
-
-@example
-killall5 -15 
-sleep 5
-killall5 -9
-@end example
-
-Otherwise, @code{chronyd} will not always save information on shutdown,
-which could be a problem if you don't use @code{dump} and
-@code{writertc} when you go offline.
+histories and RTC information to be saved out.
 @c }}}
 @c {{{ S:Other config options
 @node Configuration options overview
@@ -1008,14 +947,14 @@ determination is taking place.
 To avoid this problem, @code{chronyd} allows the gain or loss rate to be
 stored in a file, which can be read back in when the program is
 restarted.  This file is called the drift file, and might typically be
-stored in @file{/etc/chrony.drift}.  By specifying an option like the
+stored in @file{@CHRONYVARDIR@/drift}.  By specifying an option like the
 following
 
 @example
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 @end example
 
-in the configuration file (@file{/etc/chrony.conf}), the drift file
+in the configuration file (@file{@SYSCONFDIR@/chrony.conf}), the drift file
 facility will be activated.
 @c }}}
 @c }}}
@@ -1034,11 +973,11 @@ facility will be activated.
 @node Starting chronyd
 @section Starting chronyd
 If @code{chronyd} has been installed to its default location
-@file{/usr/local/sbin/chronyd}, starting it is simply a matter of
+@file{@SBINDIR@/chronyd}, starting it is simply a matter of
 entering the command
 
 @example
-/usr/local/sbin/chronyd
+@SBINDIR@/chronyd
 @end example
 
 Information messages and warnings will be logged to syslog.
@@ -1055,7 +994,7 @@ terminal, and all messages will be sent to the terminal instead of to
 syslog.
 @item -f <conf-file>
 This option can be used to specify an alternate location for the
-configuration file (default @file{/etc/chrony.conf}).
+configuration file (default @file{@SYSCONFDIR@/chrony.conf}).
 @item -r
 This option will reload sample histories for each of the servers being
 used.  These histories are created by using the @code{dump} command in
@@ -1067,6 +1006,12 @@ maintain clock compensation whilst not under @code{chronyd's} control.
 The only version where this happens so far is Linux.  On systems where
 this is not the case, e.g. Solaris and SunOS the option should not be
 used.
+@item -R
+When this option is used, the @code{initstepslew} directive and the
+@code{makestep} directive used with a positive limit will be ignored.
+This option is useful when restarting @code{chronyd} and can be used
+in conjuction with the `-r' option.
+
 @item -s
 This option will set the system clock from the computer's real-time
 clock.  This is analogous to supplying the `-s' flag to the
@@ -1102,15 +1047,17 @@ supported only on Linux.
 This option will lock chronyd into RAM so that it will never be paged
 out.  This mode is only supported on Linux.
 @item -4
-With this option hostnames will be resolved only to IPv4 addresses.
+With this option hostnames will be resolved only to IPv4 addresses and only
+IPv4 sockets will be created.
 @item -6
-With this option hostnames will be resolved only to IPv6 addresses.
+With this option hostnames will be resolved only to IPv6 addresses and only
+IPv6 sockets will be created.
 @end table
 
 On systems that support an @file{/etc/rc.local} file for starting
 programs at boot time, @code{chronyd} can be started from there.
 
-On systems with a System V style initialisation (e.g. Solaris), a
+On systems with a System V style initialisation, a
 suitable start/stop script might be as shown below.  This might be
 placed in the file @file{/etc/rc2.d/S83chrony}.
 
@@ -1130,7 +1077,7 @@ killproc() @{            # kill the named process(es)
 case "$1" in
 
 'start')
-   if [ -f /opt/free/sbin/chronyd -a -f /etc/chrony.conf ]; then
+   if [ -f /opt/free/sbin/chronyd -a -f @SYSCONFDIR@/chrony.conf ]; then
      /opt/free/sbin/chronyd
    fi
    ;;
@@ -1155,7 +1102,7 @@ service.)
 @node Configuration file
 @section The chronyd configuration file
 @c {{{ section top
-The configuration file is normally called @file{/etc/chrony.conf}; in
+The configuration file is normally called @file{@SYSCONFDIR@/chrony.conf}; in
 fact, this is the compiled-in default. However, other locations can be
 specified with a command line option.
 
@@ -1172,16 +1119,20 @@ directives can occur in any order in the file.
 * broadcast directive::         Make chronyd act as an NTP broadcast server
 * cmdallow directive::          Give control access to chronyc on other computers
 * cmddeny directive::           Deny control access to chronyc on other computers
+* combinelimit directive::      Limit sources included in combining algorithm
 * commandkey directive::        Set runtime command key
+* corrtimeratio directive::     Set correction time ratio
 * cmdport directive::           Set port to use for runtime commanding
 * deny directive::              Deny access to NTP clients
 * driftfile directive::         Specify location of file containing drift data
 * dumpdir directive::           Specify directory for dumping measurements
 * dumponexit directive::        Dump measurements when daemon exits
 * fallbackdrift directive::     Specify fallback drift intervals
+* generatecommandkey directive:: Generate command key automatically
 * include directive::           Include a configuration file
 * initstepslew directive::      Trim the system clock on boot-up.
 * keyfile directive::           Specify location of file containing keys
+* leapsectz directive::         Read leap second data from tz database
 * linux_hz directive::          Define a non-standard value of the kernel HZ constant
 * linux_freq_scale directive::  Define a non-standard value to compensate the kernel frequency bias
 * local directive::             Allow unsynchronised machine to act as server
@@ -1191,9 +1142,12 @@ directives can occur in any order in the file.
 * logdir directive::            Specify directory for logging
 * mailonchange directive::      Send email if a clock correction above a threshold occurs
 * makestep directive::          Step system clock if large correction is needed
+* maxchange directive::         Set maximum allowed offset
 * manual directive::            Allow manual entry using chronyc's settime cmd.
 * maxclockerror directive::     Set maximum frequency error of local clock
+* maxsamples directive::        Set maximum number of samples per source
 * maxupdateskew directive::     Stop bad estimates upsetting machine clock
+* minsamples directive::        Set minimum number of samples per source
 * noclientlog directive::       Prevent chronyd from gathering data about clients
 * clientloglimit directive::    Set client log memory limit
 * peer directive::              Specify an NTP peer
@@ -1210,6 +1164,7 @@ directives can occur in any order in the file.
 * stratumweight directive::     Specify how important is stratum when selecting source
 * lock_all directive::          Require that chronyd be locked into RAM. 
 * tempcomp directive::          Specify temperature sensor and compensation coefficients
+* user directive::              Specify user for dropping root privileges
 
 @end menu
 @c }}}
@@ -1407,12 +1362,12 @@ chronyd is running.
 You can have more than 1 @code{broadcast} directive if you have more than 1
 network interface onto which you wish to send NTP broadcast packets.
 
-Chronyd itself cannot currently act as a broadcast client; it must always be
+@code{chronyd} itself cannot currently act as a broadcast client; it must always be
 configured as a point-to-point client by defining specific NTP servers and
 peers.  This broadcast server feature is intended for providing a time source
 to other NTP software (e.g. various MS Windows clients).
 
-If xntpd is used as the broadcast client, it will try to use a point-to-point
+If ntpd is used as the broadcast client, it will try to use a point-to-point
 client/server NTP access to measure the round-trip delay.  Thus, the broadcast
 subnet should also be the subject of an @code{allow} directive (@pxref{allow
 directive}).
@@ -1445,6 +1400,30 @@ The syntax is identical.
 There is also a @code{cmddeny all} directive with similar behaviour to the
 @code{cmdallow all} directive.
 @c }}}
+@c {{{ combinelimit
+@node combinelimit directive
+@subsection combinelimit
+When @code{chronyd} has multiple sources available for synchronization, it has
+to select one source as the synchronization source. The measured offsets and
+frequencies of the system clock relative to the other sources, however, can be
+combined with the selected source to improve the accuracy of the system clock.
+
+The @code{combinelimit} directive limits which sources are included in the
+combining algorithm. Their synchronization distance has to be shorter than the
+distance of the selected source multiplied by the value of the limit. Also,
+their measured frequencies have to be close to the frequency of the selected
+source.
+
+By default, the limit is 3. Setting the limit to 0 effectively disables the
+source combining algorithm and only the selected source will be used to
+control the system clock.
+
+The syntax is
+
+@example
+combinelimit <limit>
+@end example
+@c }}}
 @c {{{ commandkey
 @node commandkey directive
 @subsection commandkey
@@ -1459,11 +1438,13 @@ An example of the commandkey command is
 commandkey 20
 @end example
 
+By default, the key number is 0.
+
 In the key file (see the keyfile command) there should be a line of
 the form
 
 @example
-20 foobar
+20 MD5 HEX:B028F91EA5C38D06C2E140B26C7F41EC
 @end example
 
 When running the chronyc program to perform run-time configuration,
@@ -1474,7 +1455,8 @@ password foobar
 @end example
 
 must be entered before any commands affecting the operation of the
-daemon can be entered.
+daemon can be entered, or chronyc must be started with the `-a' option to run
+the password command automatically.
 @c }}}
 @c {{{ cmdport
 @node cmdport directive
@@ -1493,6 +1475,38 @@ cmdport 257
 This would make @code{chronyd} use 257/udp as its command port.
 (@code{chronyc} would need to be run with the @code{-p 257} switch to
 inter-operate correctly).
+@c }}}
+@c {{{ corrtimeratio
+@node corrtimeratio directive
+@subsection corrtimeratio
+When @code{chronyd} makes a time correction, it controls how quickly
+the system clock is slewed (so far only on Linux).  This rate
+temporarily affects the frequency error of the system clock.
+
+The @code{corrtimeratio} directive controls the ratio between the
+duration in which the clock is slewed for an average correction
+according to the source history and the interval in which the
+corrections are done (usually the NTP polling interval).  Corrections
+larger than the average take less time and smaller corrections take
+more time, the amount of the correction and the correction time are
+inversely proportional.
+
+Increasing @code{corrtimeratio} makes the overall frequency error of
+the system clock smaller, but increases the overall time error as
+the corrections will take longer.
+
+By default, the ratio is 1, which means the duration of an average
+correction will be close to the update interval.
+
+The syntax is
+
+@example
+corrtimeratio 10
+@end example
+
+The current remaining correction is shown in the @code{tracking} report
+(@pxref{tracking command}) as the @code{System time} value.
+
 @c }}}
 @c {{{ deny
 @node deny directive
@@ -1534,7 +1548,7 @@ which the true rate actually lies.
 An example of the driftfile command is
 
 @example
-driftfile /etc/chrony.drift
+driftfile @CHRONYVARDIR@/drift
 @end example
 @c }}}
 @c {{{ dumpdir
@@ -1560,12 +1574,12 @@ directory where the measurement histories are saved.
 An example of the command is
 
 @example
-dumpdir /var/log/chrony
+dumpdir @CHRONYVARDIR@
 @end example
 
 A source whose reference id (the IP address for IPv4 sources) is
 1.2.3.4 would have its measurement history saved in the file
-@file{/var/log/chrony/1.2.3.4.dat}.
+@file{/var/lib/chrony/1.2.3.4.dat}.
 @c }}}
 @c {{{ dumponexit
 @node dumponexit directive
@@ -1602,6 +1616,16 @@ By default (or if the specified maximum or minimum is 0), no fallbacks
 will be used and the clock frequency will stay at the last value
 calculated before synchronisation was lost.
 @c }}}
+@c {{{ generatecommandkey
+@node generatecommandkey directive
+@subsection generatecommandkey
+With this directive, if the command key is not found on start in the file
+specified by the @code{keyfile} directive, @code{chronyd} will generate a new
+command key from the /dev/urandom file and write it to the key file.
+
+The generated key will use SHA1 if @code{chronyd} is compiled with the support,
+otherwise MD5 will be used.
+@c }}}
 @c {{{ include
 @node include directive
 @subsection include
@@ -1610,7 +1634,7 @@ This is useful when maintaining configuration on multiple hosts to
 keep the differences in a separate file.
 
 @example
-include /etc/chrony/local.conf
+include @SYSCONFDIR@/chrony/local.conf
 @end example
 @c }}}
 @c {{{ initstepslew
@@ -1685,7 +1709,7 @@ ID/key pairs for the following 2 uses:
 The format of the command is shown in the example below
 
 @example
-keyfile /etc/chrony.keys
+keyfile @SYSCONFDIR@/chrony.keys
 @end example
 
 The argument is simply the name of the file containing the ID/key
@@ -1694,21 +1718,55 @@ pairs.  The format of the file is shown below
 @example
 10 tulip
 11 hyacinth
-20 crocus
-25 iris
+20 MD5 ASCII:crocus
+25 SHA1 HEX:1dc764e0791b11fa67efc7ecbc4b0d73f68a070c 
  ...
 @end example
 
-Each line consists of an ID and a password.  The ID can be any
-unsigned integer in the range 0 through 2**32-1.  The password can be
-any string of characters not containing a space.
+Each line consists of an ID, a name of authentication hash function (optional)
+and a password. The ID can be any unsigned integer in the range 0 through
+2**32-1.  The hash function is MD5 by default, depending on how was
+@code{chronyd} compiled other allowed hash functions may be SHA1, SHA256,
+SHA384, SHA512, RMD128, RMD160, RMD256, RMD320, TIGER and WHIRLPOOL.  The
+password can be encoded as a string of characters not containing a space with
+optional @code{ASCII:} prefix or as a hexadecimal number with @code{HEX:}
+prefix.
 
-For NTP use, the MD5 authentication scheme is always used.  This must be
-borne in mind if @code{chronyd} is to inter-operate in authenticated
-mode with @code{xntpd} running on other computers.
+For maximum security, it's recommended to use SHA1 or stronger hash function.
+The passwords should be random and they should be as long as the output size of
+the configured hash function, e.g. 160 bits with SHA1.
 
-The ID for the chronyc authentication key is specified with the
-commandkey command (see earlier).
+The ID for the chronyc authentication key is specified with the commandkey
+command (see earlier). The command key can be generated automatically on
+start with the @code{generatecommandkey} directive.
+@c }}}
+@c {{{ leapsectz
+@node leapsectz directive
+@subsection leapsectz
+This directive is used to set the name of the timezone in the system
+tz database which @code{chronyd} can use to find out when will the
+next leap second occur.  It will periodically check if the times
+23:59:59 and 23:59:60 are valid on Jun 30 and Dec 31 in the timezone.
+A useful timezone is @code{right/UTC}.
+This is mainly useful with reference clocks which don't provide the
+leap second information.  It is not necessary to restart
+@code{chronyd} if the tz database is updated with a new leap second at
+least 12 hours before the event.
+
+An example of the command is
+
+@example
+leapsectz right/UTC
+@end example
+
+The following shell command verifies that the timezone contains leap
+seconds and can be used with this directive
+
+@example
+$ TZ=right/UTC date -d 'Dec 31 2008 23:59:60'
+Wed Dec 31 23:59:60 UTC 2008
+@end example
+
 @c }}}
 @c {{{ local
 @node local directive
@@ -1859,9 +1917,9 @@ expressed in UTC, not the local time zone.
 IP address of server/peer from which measurement comes [158.152.1.76]
 @item
 Leap status (@code{N} means normal, @code{+} means that the last minute
-of today has 61 seconds, @code{-} means that the last minute of the day
-has 59 seconds, @code{?} means the remote computer is not currently
-synchronised.) [N]
+of the current month has 61 seconds, @code{-} means that the last minute
+of the month has 59 seconds, @code{?} means the remote computer is not
+currently synchronised.) [N]
 @item
 Stratum of remote computer. [2]
 @item
@@ -1966,7 +2024,8 @@ An example line (which actually appears as a single line in the file)
 from the tracking log file is shown below.
 
 @example
-1998-07-22 05:40:50 158.152.1.76     3    340.529      1.606  1.046e-03
+2012-02-23 05:40:50 158.152.1.76     3    340.529      1.606  1.046e-03 N \
+            4  6.849e-03 -4.670e-04
 @end example
 
 The columns are as follows (the quantities in square brackets are the
@@ -1974,7 +2033,7 @@ values from the example line above) :
 
 @enumerate 1
 @item
-Date [1998-07-22]
+Date [2012-02-03]
 @item
 Hour:Minute:Second [05:40:50].  Note that the date/time pair is
 expressed in UTC, not the local time zone.
@@ -1992,6 +2051,18 @@ The error bounds on the frequency (in ppm) [1.606]
 The estimated local offset at the epoch (which is rapidly corrected by
 slewing the local clock.  (In seconds, positive indicates the local
 system is fast of UTC). [1.046e-3]
+@item
+Leap status (@code{N} means normal, @code{+} means that the last minute
+of this month has 61 seconds, @code{-} means that the last minute of the month
+has 59 seconds, @code{?} means the clock is not currently synchronised.) [N]
+@item
+The number of combined sources. [4]
+@item
+The estimated standard deviation of the combined offset (in seconds).
+[6.849e-03]
+@item
+The remaining offset correction from the previous update (in seconds, positive
+means the system clock is slow of UTC). [-4.670e-04]
 @end enumerate
 
 A banner is periodically written to the log file to indicate the
@@ -2075,8 +2146,8 @@ Sequence number of driver poll within one polling interval for raw
 samples, or @code{-} for filtered samples. [7]
 @item
 Leap status (@code{N} means normal, @code{+} means that the last minute
-of today has 61 seconds, @code{-} means that the last minute of the day
-has 59 seconds). [N]
+of the current month has 61 seconds, @code{-} means that the last minute
+of the month has 59 seconds). [N]
 @item
 Flag indicating whether the sample comes from PPS source. (1 for yes,
 0 for no, or @code{-} for filtered sample). [1]
@@ -2210,6 +2281,27 @@ makestep 1000 10
 This would step system clock if the adjustment is larger than 1000
 seconds, but only in the first ten clock updates.
 @c }}}
+@c {{{ maxchange
+@node maxchange directive
+@subsection maxchange
+This directive sets the maximum allowed offset corrected on a clock
+update.  The check is performed only after the specified number of
+updates to allow a large initial adjustment of the system clock.  When
+an offset larger than the specified maximum occurs, it will be ignored
+for the specified number of times and then @code{chronyd} will give up
+and exit (a negative value can be used to never exit).  In both cases
+a message is sent to syslog.
+
+An example of the use of this directive is
+
+@example
+maxchange 1000 1 2
+@end example
+
+After the first clock update, @code{chronyd} will check the offset on
+every clock update, it will ignore two adjustments larger than 1000
+seconds and exit on another one.
+@c }}}
 @c {{{ manual
 @node manual directive
 @subsection manual
@@ -2242,6 +2334,19 @@ maxclockerror <error-in-ppm>
 Typical values for <error-in-ppm> might be 10 for a low quality clock
 to 0.1 for a high quality clock using a temperature compensated
 crystal oscillator.
+@c }}}
+@c {{{ maxsamples
+@node maxsamples directive
+@subsection maxsamples
+The @code{maxsamples} directive sets the maximum number of samples
+@code{chronyd} should keep for each source. The default is 0, which
+disables the configurable limit, and the useful range is 4 to 64.
+
+The syntax is
+
+@example
+maxsamples <samples>
+@end example
 @c }}}
 @c {{{ maxupdateskew
 @node maxupdateskew directive
@@ -2276,6 +2381,19 @@ used to update the master estimate.  So if @code{chronyd} has an existing
 highly-reliable master estimate and a new estimate is generated which
 has large error bounds, the existing master estimate will dominate in
 the new master estimate.
+@c }}}
+@c {{{ minsamples
+@node minsamples directive
+@subsection minsamples
+The @code{minsamples} directive sets the minimum number of samples
+@code{chronyd} should try to keep for each source. The default is 0 and the
+useful range is 4 to 64.
+
+The syntax is
+
+@example
+minsamples <samples>
+@end example
 @c }}}
 @c {{{ noclientlog
 @node noclientlog directive
@@ -2324,7 +2442,8 @@ on your machine.
 The compiled in default is udp/123, the standard NTP port.  It is
 unlikely that you would ever need to change this value.  A possible
 exception would be if you wanted to operate strictly in client-only
-mode and never be available as a server to xntpd clients.
+mode and never be available as a server to ntpd clients.  If set to 0,
+the kernel will assign a random port.
 
 An example of the port command is
 
@@ -2379,7 +2498,7 @@ Some examples of applications that can be used as SHM sources are @code{gpsd},
 @item SOCK
 Unix domain socket driver.  It is similar to the SHM driver, but uses a
 different format and uses a socket instead of shared memory.  It does not
-require polling, the offset resolution is not limited to microseconds and it
+require polling and it
 supports transmitting of PPS data.  The parameter is a path to the socket which
 will be created by @code{chronyd} and used to receive the messages.  The format
 of messages sent over the socket is described in the
@@ -2390,7 +2509,7 @@ protocol.  The path where the socket should be created is described in the
 @code{gpsd(8)} man page.  For example:
 
 @example
-refclock SOCK /tmp/chrony.tty0.sock
+refclock SOCK /var/run/chrony.ttyS0.sock
 @end example
 
 @end table
@@ -2492,7 +2611,7 @@ of the system's real-time clock (RTC).
 The syntax is illustrated in the following example
 
 @example
-rtcfile /etc/chrony.rtc
+rtcfile @CHRONYVARDIR@/rtc
 @end example
 
 @code{chronyd} saves information in this file when it exits and when the
@@ -2508,8 +2627,7 @@ conditions apply:
 
 @enumerate 1
 @item
-You are running Linux version 2.2.x or 2.4.x (for any value of x), or v2.0.x
-with x>=32. 
+You are running Linux version 2.2.x or later.
 
 @item
 You have compiled the kernel with extended real-time clock support
@@ -2563,12 +2681,12 @@ This mode is supported only on Linux.
 
 This directive uses the Linux sched_setscheduler() system call to
 instruct the kernel to use the SCHED_FIFO first-in, first-out
-real-time scheduling policy for Chronyd with the specified priority.
-This means that whenever Chronyd is ready to run it will run,
+real-time scheduling policy for @code{chronyd} with the specified priority.
+This means that whenever @code{chronyd} is ready to run it will run,
 interrupting whatever else is running unless it is a higher priority
-real-time process.  This should not impact performance as Chronyd's
+real-time process.  This should not impact performance as @code{chronyd's}
 resource requirements are modest, but it should result in lower and
-more consistent latency since Chronyd will not need to wait for the
+more consistent latency since @code{chronyd} will not need to wait for the
 scheduler to get around to running it.  You should not use this unless
 you really need it.  The sched_setscheduler man page has more details.
 @c }}}
@@ -2598,10 +2716,10 @@ ignore stratum when selecting the source.
 
 The @code{lock_all} directive will lock chronyd into RAM so that it
 will never be paged out.  This mode is only supported on Linux.  This
-directive uses the Linux mlockall() system call to prevent Chronyd
+directive uses the Linux mlockall() system call to prevent @code{chronyd}
 from ever being swapped out.  This should result in lower and more
 consistent latency.  It should not have significant impact on
-performance as Chronyd's memory usage is modest.  The mlockall man
+performance as @code{chronyd's} memory usage is modest.  The mlockall man
 page has more details.
 @c }}}
 @c {{{ server
@@ -2694,7 +2812,7 @@ NTP client mode datagram.
 The NTP protocol supports the inclusion of checksums in the packets, to
 prevent computers having their system time upset by rogue packets being
 sent to them.  The checksums are generated as a function of a password,
-using the MD5 algorithm.
+using the cryptographic hash function set in the key file.
 
 The association between key numbers and passwords is contained in the
 keys file, defined by the keyfile command.
@@ -2788,6 +2906,15 @@ frequency will not be adjusted.  When it is 27 degrees (27000), the clock will
 be set to run 0.183ppm faster than it would be without the compensation, etc.
 
 @c }}}
+@c {{{ user
+@node user directive
+@subsection user
+The @code{user} directive sets the name of the user to which will
+@code{chronyd} drop root privileges after the initialisation. So far, it works
+only on Linux when compiled with capabilities support.
+
+By default, root privileges are not dropped.
+@c }}}
 @c }}}
 @c {{{ S:Running chronyc
 @node Running chronyc
@@ -2852,6 +2979,14 @@ With this option hostnames will be resolved only to IPv6 addresses.
 @item -m
 With this option multiple commands can be specified on the command line.
 Each argument will be interpreted as a whole command.
+@item -f <conf-file>
+This option can be used to specify an alternate location of the @code{chronyd}
+configuration file (default @file{@SYSCONFDIR@/chrony.conf}). The configuration file is
+needed for the `-a' option.
+@item -a
+With this option @code{chronyc} will try to authenticate automatically on
+start. It will read the configuration file, read the command key from the
+keyfile and run the authhash and password commands.
 @end table
 @c }}}
 @c {{{ SS:Security with chronyc
@@ -2862,7 +2997,7 @@ power to reconfigure the run-time behaviour of @code{chronyd}.  Consequently,
 @code{chronyc} is quite dangerous for the integrity of the target
 system's clock performance.  Having access to @code{chronyd} via chronyc is
 more or less equivalent to being able to modify @code{chronyd's} configuration
-file (typically @file{/etc/chrony.conf}) and to restart @code{chronyd}.
+file (typically @file{@SYSCONFDIR@/chrony.conf}) and to restart @code{chronyd}.
 
 Chronyc also provides a number of monitoring (as opposed to commanding)
 commands, which will not affect the behaviour of @code{chronyd}.  However, you
@@ -2889,6 +3024,7 @@ password:
 
 @itemize @bullet
 @item @code{activity}
+@item @code{authhash}
 @item @code{dns}
 @item @code{exit}
 @item @code{help}
@@ -2919,6 +3055,7 @@ interface.
 * add server command::          Add a new NTP server
 * allow command::               Allowing NTP client access
 * allow all command::           Allowing NTP client access
+* authhash command::            Set the command authentication hash function
 * burst command::               Initiating a rapid set of measurements
 * clients command::             Show clients that have accessed the server
 * cmdaccheck command::          Verifying command client access
@@ -2990,7 +3127,7 @@ If the auto_offline option is used in specifying some of the servers/peers, the
 @code{activity} command may be useful for detecting when all of them have
 entered the offline state after the PPP link has been disconnected.
 
-The report shows the number of servers/peers in 4 states:
+The report shows the number of servers/peers in 5 states:
 @itemize
 @item @code{online} : the server/peer is currently online (i.e. assumed by
 chronyd to be reachable)
@@ -3002,6 +3139,9 @@ server/peer will be returned to the online state.
 @item @code{burst_offline} : a burst command has been initiated for the
 server/peer and is being performed; after the burst is complete, the
 server/peer will be returned to the offline state.
+@item @code{unresolved} : the name of the server/peer wasn't resolved to an
+address yet; this server is not visible in the @code{sources} and
+@code{sourcestats} reports.
 @end itemize
 @c }}}
 @c {{{ add peer
@@ -3065,6 +3205,23 @@ directive in the configuration file.
 The effect of the allow command is identical to the @code{allow all}
 directive in the configuration file (@pxref{allow directive}).
 @c }}}
+@c {{{ authhash
+@node authhash command
+@subsubsection authhash
+This command sets the hash function used for authenticating user commands.
+For successful authentication the hash function has to be the same as the one
+set for the command key in the keys file on the server.  It needs to be set
+before the @code{password} command is used.  The default hash function is MD5.
+
+An example is
+
+@example
+authhash SHA1
+@end example
+
+The authhash command is run automatically on start if @code{chronyc} was
+started with the `-a' option.
+@c }}}
 @c {{{ burst
 @node burst command
 @subsubsection burst
@@ -3082,6 +3239,7 @@ The syntax of the burst command is as follows
 @example
 burst <n-good-measurements>/<max-measurements> [<mask>/<masked-address>]
 burst <n-good-measurements>/<max-measurements> [<masked-address>/<masked-bits>]
+burst <n-good-measurements>/<max-measurements> [<address>]
 @end example
 
 The mask and masked-address arguments are optional, in which case
@@ -3114,6 +3272,10 @@ then the burst command is applied to that source.
 This can be used with @code{masked-address} for CIDR notation, which is a
 shorter alternative to the form with mask.
 
+@item address
+This is an IP address or a hostname.  The burst command is applied only to that
+source.
+
 @end table
 
 If no mask or masked address arguments are provided, every source will
@@ -3140,6 +3302,12 @@ In the first case, the two out of ten sampling will only be applied to
 sources whose IPv4 addresses are of the form @code{1.2.x.y}, where x and y
 are arbitrary. In the second case, the sampling will be applied to sources
 whose IPv6 addresses have first 48 bits equal to @code{2001:db8:789a}.
+
+Example of the three-argument form of the command is
+
+@example
+burst 2/10 foo.bar.com
+@end example
 @c }}}
 @c {{{ clients
 @node clients command
@@ -3244,12 +3412,7 @@ periodically purged.  An example of how to do this is shown below.
 
 @example
 % mv /var/log/chrony/measurements.log /var/log/chrony/measurements1.log
-% chronyc
-chronyc> password aardvark
-200 OK
-chronyc> cyclelogs
-200 OK
-chronyc> exit
+% chronyc -a cyclelogs
 % ls -l /var/log/chrony
 -rw-r--r--   1 root     root            0 Jun  8 18:17 measurements.log
 -rw-r--r--   1 root     root        12345 Jun  8 18:17 measurements1.log
@@ -3670,15 +3833,17 @@ the @code{offline} command being used, @code{chronyd} would assume that the
 source had failed and would attempt to pick another synchronisation
 source.
 
-There are three forms of the @code{offline} command.  The first form is a
-wildcard, meaning all sources.  The second form allows a IP address mask
+There are four forms of the @code{offline} command.  The first form is a
+wildcard, meaning all sources.  The second form allows an IP address mask
 and a masked address to be specified.  The third form uses the CIDR
-notation.  These forms are illustrated below.
+notation.  The fourth form uses an IP address or a hostname.  These forms are
+illustrated below.
 
 @example
 offline
 offline 255.255.255.0/1.2.3.0
 offline 2001:db8:789a::/48
+offline foo.bar.com
 @end example
 
 The second form means that the @code{offline} command is to be applied
@@ -3686,7 +3851,8 @@ to any source whose IPv4 address is in the @code{1.2.3} subnet.  (The host's
 address is logically and-ed with the mask, and if the result matches the
 masked-address the host is processed).  The third form means that the
 command is to be applied to all sources whose IPv6 addresses have first
-48 bits equal to @code{2001:db8:789a}.
+48 bits equal to @code{2001:db8:789a}.  The fourth form means that the command
+is to be applied only to that one source.
 
 The wildcard form of the address is actually equivalent to
 
@@ -3715,6 +3881,8 @@ password on the command line is as follows
 
 @example
 password xyzzy
+password ASCII:xyzzy
+password HEX:78797a7a79
 @end example
 
 To enter the password without it being echoed, enter
@@ -3728,9 +3896,13 @@ should enter the password and press return.  (Note that the no-echo mode
 is limited to 8 characters on SunOS 4.1 due to limitations in the system
 library.  Other systems do not have this restriction.)
 
-The password is any string of characters not containing whitespace.  It
-has to match @code{chronyd's} currently defined command key (@pxref{commandkey
-directive}).
+The password can be encoded as a string of characters not containing a space
+with optional @code{ASCII:} prefix or as a hexadecimal number with @code{HEX:}
+prefix.  It has to match @code{chronyd's} currently defined command key
+(@pxref{commandkey directive}).
+
+The password command is run automatically on start if @code{chronyc} was
+started with the `-a' option.
 @c }}}
 @c {{{ polltarget
 @node polltarget command
@@ -3851,8 +4023,6 @@ chronyc (@pxref{manual command}).
 It should be noted that the computer's sense of time will only be as
 accurate as the reference you use for providing this input (e.g. your
 watch), as well as how well you can time the press of the return key.
-When inputting time to an isolated network, I have a battery operated
-alarm clock that is synchronised to the Rugby MSF time signal in the UK.
 
 Providing your computer's time zone is set up properly, you will be able
 to enter a local time (rather than UTC).
@@ -3897,11 +4067,11 @@ columns.
 @example
 @group
 210 Number of sources = 3
-MS Name/IP address      Stratum Poll LastRx Last sample
-=======================================================================
-^+ a.b.c                    3     6    47m  -9491us[-6983us] +/-  159ms
-^+ d.e.f                    3     6    47m    +32ms[  +35ms] +/-  274ms
-^* g.h.i                    2     6    47m  +8839us[  +11ms] +/-  214ms
+MS Name/IP address         Stratum Poll Reach LastRx Last sample
+===============================================================================
+#* GPS0                          0   4   377    11   -479ns[ -621ns] +/-  134ns
+^? a.b.c                         2   6   377    23   -923us[ -924us] +/-   43ms
+^+ d.e.f                         1   6   377    21  -2629us[-2619us] +/-   86ms
 @end group
 @end example
 
@@ -3915,12 +4085,15 @@ reference clock.
 
 @item S
 This column indicates the state of the sources.  @code{*} indicates the
-source to which @code{chronyd} is current synchronised.  @code{+} indicates
-other acceptable sources.  @code{?} indicates sources to which
-connectivity has been lost.  @code{x} indicates a clock which @code{chronyd}
+source to which @code{chronyd} is currently synchronised.  @code{+}
+indicates acceptable sources which are combined with the selected
+source.  @code{-} indicates acceptable sources which are excluded by
+the combining algorithm.  @code{?} indicates sources to which
+connectivity has been lost or whose packets don't pass all tests.
+@code{x} indicates a clock which @code{chronyd}
 thinks is is a falseticker (i.e. its time is inconsistent with a
 majority of other sources).  @code{~} indicates a source whose time
-appears to have too much variability.  The @code{~} condition is also
+appears to have too much variability.  The @code{?} condition is also
 shown at start-up, until at least 3 samples have been gathered from it.
 
 @item Name/IP address
@@ -3942,10 +4115,18 @@ that a measurement is being made every 64 seconds.
 @code{chronyd} automatically varies the polling rate in response to prevailing
 conditions.
 
+@item Reach
+This shows the source's reachability register printed as octal number.  The
+register has 8 bits and is updated on every received or missed packet from
+the source.  A value of 377 indicates that a valid reply was received for all
+from the last eight transmissions.
+
 @item LastRx
 This column shows how long ago the last sample was received from the
 source.  This is normally in seconds.  The letters @code{m}, @code{h},
-@code{d} or @code{y} indicate minutes, hours, days or years.
+@code{d} or @code{y} indicate minutes, hours, days or years.  A value
+of 10 years indicates there were no samples received from this source
+yet.
 
 @item Last sample
 This column shows the offset between the local clock and the source at
@@ -4046,13 +4227,18 @@ performance.  An example of the output is shown below.
 @example
 Reference ID    : 1.2.3.4 (a.b.c)
 Stratum         : 3
-Ref time (UTC)  : Sun May 17 06:13:11 1998
-System time     : 0.000000000 seconds fast of NTP time
+Ref time (UTC)  : Fri Feb  3 15:00:29 2012
+System time     : 0.000001501 seconds slow of NTP time
+Last offset     : -0.000001632 seconds
+RMS offset      : 0.000002360 seconds
 Frequency       : 331.898 ppm fast
 Residual freq   : 0.004 ppm
 Skew            : 0.154 ppm
 Root delay      : 0.373169 seconds
 Root dispersion : 0.024780 seconds
+Update interval : 64.2 seconds
+Leap status     : Normal
+
 @end example
 
 The fields are explained as follows.
@@ -4064,7 +4250,7 @@ the computer is currently synchronised.  If this is @code{127.127.1.1}
 it means the computer is not synchronised to any external source and
 that you have the `local' mode operating (via the @code{local} command
 in @code{chronyc} (@pxref{local command}), or the @code{local} directive
-in the @file{/etc/chrony.conf} file (@pxref{local directive})).
+in the @file{@SYSCONFDIR@/chrony.conf} file (@pxref{local directive})).
 
 @item Stratum
 The stratum indicates how many hops away from a computer with an
@@ -4073,7 +4259,7 @@ computer, so the computer in the example is two hops away
 (i.e. @code{a.b.c} is a stratum-2 and is synchronised from a stratum-1).
 
 @item Ref time
-This is the time (GMT) at which the last measurement from the reference
+This is the time (UTC) at which the last measurement from the reference
 source was processed.
 
 @item System time
@@ -4094,9 +4280,13 @@ On systems such as Solaris and SunOS, @code{chronyd} has no means to
 adjust the fundamental rate of the system clock, so keeps the system
 time correct by periodically making offsets to it as though an error had
 been measured.  The build up of these offsets will be observed in this
-report.  On systems such as Linux where @code{chronyd} can adjust the
-fundamental rate of the system clock, this value will show zero unless a
-very recent measurement has shown the system to be error.
+report.
+
+@item Last offset
+This is the estimated local offset on the last clock update.
+
+@item RMS offset
+This is a long-term average of the offset value.
 
 @item Frequency
 The `frequency' is the rate by which the system's clock would be would
@@ -4105,10 +4295,8 @@ ppm (parts per million).  For example, a value of 1ppm would mean that
 when the system's clock thinks it has advanced 1 second, it has actually
 advanced by 1.000001 seconds relative to true time.
 
-As you can see in the example, the clock in the computer I developed
-@code{chrony} on is not a very good one - it gains about 30 seconds per
-day!  This was the reason I started to write @code{chrony} in the first
-place.
+As you can see in the example, the clock in the computer is not a very
+good one - it gains about 30 seconds per day!
  
 @item Residual freq
 This shows the `residual frequency' for the currently selected reference
@@ -4149,6 +4337,13 @@ stratum-1 computer is correct) is given by
 @example
 clock_error <= root_dispersion + (0.5 * |root_delay|)
 @end example
+
+@item Update interval
+This is the interval between the last two clock updates.
+
+@item Leap status
+This is the leap status, which can be @code{Normal}, @code{Insert second},
+@code{Delete second} or @code{Not synchronised}.
 
 @end table
 @c }}}

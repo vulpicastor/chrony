@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -19,27 +19,46 @@
  * 
  **********************************************************************
 
-  ======================================================================
+  =======================================================================
+
+  Routines implementing crypto hashing using internal MD5 implementation.
 
   */
 
-#ifndef _GOT_RTC_LINUX_H
-#define _GOT_RTC_LINUX_H
+#include "config.h"
+#include "sysincl.h"
+#include "hash.h"
+#include "memory.h"
 
-#include "reports.h"
+#include "md5.c"
 
-extern int RTC_Linux_Initialise(void);
-extern void RTC_Linux_Finalise(void);
-extern void RTC_Linux_TimePreInit(void);
-extern void RTC_Linux_TimeInit(void (*after_hook)(void *), void *anything);
-extern void RTC_Linux_StartMeasurements(void);
+static MD5_CTX ctx;
 
-/* 0=success, 1=no driver, 2=can't write file */
-extern int RTC_Linux_WriteParameters(void);
+int
+HSH_GetHashId(const char *name)
+{
+  /* only MD5 is supported */
+  if (strcmp(name, "MD5"))
+    return -1;
 
-extern int RTC_Linux_GetReport(RPT_RTC_Report *report);
-extern int RTC_Linux_Trim(void);
+  return 0;
+}
 
-extern void RTC_Linux_CycleLogFile(void);
+unsigned int
+HSH_Hash(int id, const unsigned char *in1, unsigned int in1_len,
+    const unsigned char *in2, unsigned int in2_len,
+    unsigned char *out, unsigned int out_len)
+{
+  if (out_len < 16)
+    return 0;
 
-#endif /* _GOT_RTC_LINUX_H */
+  MD5Init(&ctx);
+  MD5Update(&ctx, in1, in1_len);
+  if (in2)
+    MD5Update(&ctx, in2, in2_len);
+  MD5Final(&ctx);
+
+  memcpy(out, ctx.digest, 16);
+
+  return 16;
+}

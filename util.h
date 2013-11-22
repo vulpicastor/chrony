@@ -32,6 +32,7 @@
 #include "addressing.h"
 #include "ntp.h"
 #include "candm.h"
+#include "hash.h"
 
 /* Convert a timeval into a floating point number of seconds */
 extern void UTI_TimevalToDouble(struct timeval *a, double *b);
@@ -62,6 +63,9 @@ extern void UTI_AddDoubleToTimeval(struct timeval *start, double increment, stru
 /* Calculate the average and difference (as a double) of two timevals */
 extern void UTI_AverageDiffTimevals(struct timeval *earlier, struct timeval *later, struct timeval *average, double *diff);
 
+/* Calculate result = a - b + c */
+extern void UTI_AddDiffToTimeval(struct timeval *a, struct timeval *b, struct timeval *c, struct timeval *result);
+
 /* Convert a timeval into a temporary string, largely for diagnostic
    display */
 extern char *UTI_TimevalToString(struct timeval *tv);
@@ -87,8 +91,13 @@ extern char *UTI_TimeToLogForm(time_t t);
 /* Adjust time following a frequency/offset change */
 extern void UTI_AdjustTimeval(struct timeval *old_tv, struct timeval *when, struct timeval *new_tv, double *delta, double dfreq, double doffset);
 
+/* Get a random value to fuzz an NTP timestamp in the given precision */
+extern uint32_t UTI_GetNTPTsFuzz(int precision);
 
-extern void UTI_TimevalToInt64(struct timeval *src, NTP_int64 *dest);
+extern double UTI_Int32ToDouble(NTP_int32 x);
+extern NTP_int32 UTI_DoubleToInt32(double x);
+
+extern void UTI_TimevalToInt64(struct timeval *src, NTP_int64 *dest, uint32_t fuzz);
 
 extern void UTI_Int64ToTimeval(NTP_int64 *src, struct timeval *dest);
 
@@ -100,6 +109,14 @@ extern Float UTI_FloatHostToNetwork(double x);
 
 /* Set FD_CLOEXEC on descriptor */
 extern void UTI_FdSetCloexec(int fd);
+
+extern int UTI_GenerateNTPAuth(int hash_id, const unsigned char *key, int key_len,
+    const unsigned char *data, int data_len, unsigned char *auth, int auth_len);
+extern int UTI_CheckNTPAuth(int hash_id, const unsigned char *key, int key_len,
+    const unsigned char *data, int data_len, const unsigned char *auth, int auth_len);
+
+/* Decode password encoded in ASCII or HEX */
+extern int UTI_DecodePasswordFromText(char *key);
 
 #if defined (INLINE_UTILITIES)
 #define INLINE_STATIC inline static

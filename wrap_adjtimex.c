@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2002
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011-2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,10 +30,6 @@
   */
 
 #include "config.h"
-
-#ifdef LINUX
-
-#define _LOOSE_KERNEL_NAMES
 
 #include "chrony_timex.h"
 #include "wrap_adjtimex.h"
@@ -207,13 +203,13 @@ TMX_EnableNanoPLL(void)
 }
 
 int
-TMX_ApplyPLLOffset(long offset)
+TMX_ApplyPLLOffset(long offset, long constant)
 {
   struct timex txc;
 
   txc.modes = ADJ_OFFSET | ADJ_TIMECONST | ADJ_NANO;
   txc.offset = offset;
-  txc.constant = 0;
+  txc.constant = constant;
   return adjtimex(&txc);
 }
 
@@ -229,5 +225,50 @@ TMX_GetPLLOffsetLeft(long *offset)
   return result;
 }
 
-#endif
+int
+TMX_TestStepOffset(void)
+{
+  struct timex txc;
 
+  /* Zero maxerror and check it's reset to a maximum after ADJ_SETOFFSET.
+     This seems to be the only way how to verify that the kernel really
+     supports the ADJ_SETOFFSET mode as it doesn't return an error on unknown
+     mode. */
+
+  txc.modes = ADJ_MAXERROR;
+  txc.maxerror = 0;
+  if (adjtimex(&txc) < 0 || txc.maxerror != 0)
+    return -1;
+
+  txc.modes = ADJ_SETOFFSET;
+  txc.time.tv_sec = 0;
+  txc.time.tv_usec = 0;
+  if (adjtimex(&txc) < 0 || txc.maxerror < 100000)
+    return -1;
+
+  return 0;
+}
+
+int
+TMX_ApplyStepOffset(double offset)
+{
+  struct timex txc;
+
+  txc.modes = ADJ_SETOFFSET;
+  if (offset >= 0) {
+    txc.time.tv_sec = offset;
+  } else {
+    txc.time.tv_sec = offset - 1;
+  }
+
+  /* ADJ_NANO changes the status even with ADJ_SETOFFSET, use it only when
+     STA_NANO is already enabled */
+  if (status & STA_PLL) {
+    txc.modes |= ADJ_NANO;
+    txc.time.tv_usec = 1e9 * (offset - txc.time.tv_sec);
+  } else {
+    txc.time.tv_usec = 1e6 * (offset - txc.time.tv_sec);
+  }
+
+  return adjtimex(&txc);
+}

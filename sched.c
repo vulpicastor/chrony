@@ -131,8 +131,6 @@ handle_slew(struct timeval *raw,
 void
 SCH_Initialise(void)
 {
-  struct timeval tv;
-
   FD_ZERO(&read_fds);
   n_read_fds = 0;
 
@@ -146,12 +144,12 @@ SCH_Initialise(void)
 
   LCL_AddParameterChangeHandler(handle_slew, NULL);
 
-  LCL_ReadRawTime(&tv);
-  srandom(tv.tv_sec * tv.tv_usec);
+  LCL_ReadRawTime(&last_select_ts_raw);
+  last_select_ts = last_select_ts_raw;
+
+  srandom(last_select_ts.tv_sec << 16 ^ last_select_ts.tv_usec);
 
   initialised = 1;
-
-  return;
 }
 
 
@@ -160,7 +158,6 @@ SCH_Initialise(void)
 void
 SCH_Finalise(void) {
   initialised = 0;
-  return; /* Nothing to do for now */
 }
 
 /* ================================================== */
@@ -187,8 +184,6 @@ SCH_AddInputFileHandler
   if ((fd + 1) > one_highest_fd) {
     one_highest_fd = fd + 1;
   }
-
-  return;
 }
 
 
@@ -219,19 +214,20 @@ SCH_RemoveInputFileHandler(int fd)
   }
 
   one_highest_fd = fd_to_check;
-
-  return;
-
 }
 
 /* ================================================== */
 
 void
-SCH_GetFileReadyTime(struct timeval *tv, double *err)
+SCH_GetLastEventTime(struct timeval *cooked, double *err, struct timeval *raw)
 {
-  *tv = last_select_ts;
-  if (err)
-    *err = last_select_ts_err;
+  if (cooked) {
+    *cooked = last_select_ts;
+    if (err)
+      *err = last_select_ts_err;
+  }
+  if (raw)
+    *raw = last_select_ts_raw;
 }
 
 /* ================================================== */
@@ -265,7 +261,6 @@ release_tqe(TimerQueueEntry *node)
 {
   node->next = tqe_free_list;
   tqe_free_list = node;
-  return;
 }
 
 /* ================================================== */
@@ -466,11 +461,12 @@ dispatch_timeouts(struct timeval *now) {
     ++n_done;
 
     /* If more timeouts were handled than there were in the timer queue on
-       start, assume some code is scheduling timeouts with negative delays and
-       abort.  Make the actual limit higher in case the machine is temporarily
-       overloaded and dispatching the handlers takes more time than was delay
-       of a scheduled timeout. */
-    if (n_done > n_entries_on_start * 4) {
+       start and there are now, assume some code is scheduling timeouts with
+       negative delays and abort.  Make the actual limit higher in case the
+       machine is temporarily overloaded and dispatching the handlers takes
+       more time than was delay of a scheduled timeout. */
+    if (n_done > n_timer_queue_entries * 4 &&
+        n_done > n_entries_on_start * 4) {
       LOG_FATAL(LOGF_Scheduler, "Possible infinite loop in scheduling");
     }
   }
@@ -511,12 +507,11 @@ handle_slew(struct timeval *raw,
             void *anything)
 {
   TimerQueueEntry *ptr;
+  double delta;
   int i;
 
   if (is_step_change) {
-    /* We're not interested in anything else - it won't affect the
-       functionality of timer event dispatching.  If a step change
-       occurs, just shift all the timeouts by the offset */
+    /* If a step change occurs, just shift all raw time stamps by the offset */
     
     for (ptr = timer_queue.next; ptr != &timer_queue; ptr = ptr->next) {
       UTI_AddDoubleToTimeval(&ptr->tv, -doffset, &ptr->tv);
@@ -527,8 +522,9 @@ handle_slew(struct timeval *raw,
     }
 
     UTI_AddDoubleToTimeval(&last_select_ts_raw, -doffset, &last_select_ts_raw);
-    UTI_AddDoubleToTimeval(&last_select_ts, -doffset, &last_select_ts);
   }
+
+  UTI_AdjustTimeval(&last_select_ts, cooked, &last_select_ts, &delta, dfreq, doffset);
 }
 
 /* ================================================== */
@@ -565,7 +561,7 @@ void
 SCH_MainLoop(void)
 {
   fd_set rd;
-  int status;
+  int status, errsv;
   struct timeval tv, *ptv;
   struct timeval now, cooked;
   double err;
@@ -593,12 +589,10 @@ SCH_MainLoop(void)
 
     /* if there are no file descriptors being waited on and no
        timeout set, this is clearly ridiculous, so stop the run */
-
-    if (!ptv && (n_read_fds == 0)) {
-      LOG_FATAL(LOGF_Scheduler, "No descriptors or timeout to wait for");
-    }
+    assert(ptv || n_read_fds);
 
     status = select(one_highest_fd, &rd, NULL, NULL, ptv);
+    errsv = errno;
 
     LCL_ReadRawTime(&now);
     LCL_CookTime(&now, &cooked, &err);
@@ -613,15 +607,15 @@ SCH_MainLoop(void)
     last_select_ts_err = err;
 
     if (status < 0) {
-      assert(need_to_exit);
+      if (!need_to_exit && errsv != EINTR) {
+        LOG_FATAL(LOGF_Scheduler, "select() failed : %s", strerror(errsv));
+      }
     } else if (status > 0) {
       /* A file descriptor is ready to read */
 
       dispatch_filehandlers(status, &rd);
 
     } else {
-      assert(status == 0);
-
       /* No descriptors readable, timeout must have elapsed.
        Therefore, tv must be non-null */
       assert(ptv);
@@ -632,9 +626,6 @@ SCH_MainLoop(void)
 
     }
   }         
-
-  return;
-
 }
 
 /* ================================================== */

@@ -37,8 +37,10 @@ typedef struct {
   int stratum;
   int poll;
   enum {RPT_NTP_CLIENT, RPT_NTP_PEER, RPT_LOCAL_REFERENCE} mode;
-  enum {RPT_SYNC, RPT_UNREACH, RPT_FALSETICKER, RPT_JITTERY, RPT_CANDIDATE} state;
+  enum {RPT_SYNC, RPT_UNREACH, RPT_FALSETICKER, RPT_JITTERY, RPT_CANDIDATE, RPT_OUTLIER} state;
+  enum {RPT_NORMAL, RPT_PREFER, RPT_NOSELECT} sel_option;
 
+  int reachability;
   unsigned long latest_meas_ago; /* seconds */
   double orig_latest_meas; /* seconds */
   double latest_meas; /* seconds */
@@ -49,13 +51,17 @@ typedef struct {
   uint32_t ref_id;
   IPAddr ip_addr;
   unsigned long stratum;
+  unsigned long leap_status;
   struct timeval ref_time;
   double current_correction;
+  double last_offset;
+  double rms_offset;
   double freq_ppm;
   double resid_freq_ppm;
   double skew_ppm;
   double root_delay;
   double root_dispersion;
+  double last_update_interval;
 } RPT_TrackingReport;
 
 typedef struct {
@@ -113,6 +119,7 @@ typedef struct {
   int offline;
   int burst_online;
   int burst_offline;
+  int unresolved;
 } RPT_ActivityReport;
 
 #endif /* GOT_REPORTS_H */

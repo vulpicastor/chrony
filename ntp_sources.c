@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011-2012
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -103,8 +103,6 @@ NSR_Initialise(void)
   initialised = 1;
 
   LCL_AddParameterChangeHandler(slew_sources, NULL);
-
-  return;
 }
 
 /* ================================================== */
@@ -113,7 +111,6 @@ void
 NSR_Finalise(void)
 {
   initialised = 0;
-  return; /* Nothing to do yet */
 }
 
 /* ================================================== */
@@ -179,8 +176,6 @@ find_slot(NTP_Remote_Address *remote_addr, int *slot, int *found)
     *found = 0;
     *slot = hash;
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -287,6 +282,19 @@ NSR_AddUnresolvedSource(char *name, int port, NTP_Source_Type type, SourceParame
 
 /* ================================================== */
 
+void
+NSR_ResolveSources(void)
+{
+  /* Try to resolve unresolved sources now */
+  if (resolving_interval) {
+    SCH_RemoveTimeout(resolving_id);
+    resolving_interval--;
+    resolve_sources(NULL);
+  }
+}
+
+/* ================================================== */
+
 /* Procedure to remove a source.  We don't bother whether the port
    address is matched - we're only interested in removing a record for
    the right IP address.  Thus the caller can specify the port number
@@ -333,9 +341,10 @@ NSR_RemoveSource(NTP_Remote_Address *remote_addr)
 
 /* ================================================== */
 
-/* This routine is called by ntp_io when a new packet arrives off the network.*/
+/* This routine is called by ntp_io when a new packet arrives off the network,
+   possibly with an authentication tail */
 void
-NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr)
+NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, int length)
 {
   int slot, found;
 
@@ -349,27 +358,9 @@ NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP
   
   find_slot(remote_addr, &slot, &found);
   if (found == 2) { /* Must match IP address AND port number */
-    NCR_ProcessNoauthKnown(message, now, now_err, records[slot].data);
+    NCR_ProcessKnown(message, now, now_err, records[slot].data, length);
   } else {
-    NCR_ProcessNoauthUnknown(message, now, now_err, remote_addr);
-  }
-}
-
-/* ================================================== */
-
-/* This routine is called by ntp_io when a new packet with an authentication tail arrives off the network */
-void
-NSR_ProcessAuthenticatedReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr)
-{
-  int slot, found;
-
-  assert(initialised);
-
-  find_slot(remote_addr, &slot, &found);
-  if (found == 2) {
-    NCR_ProcessAuthKnown(message, now, now_err, records[slot].data);
-  } else {
-    NCR_ProcessAuthUnknown(message, now, now_err, remote_addr);
+    NCR_ProcessUnknown(message, now, now_err, remote_addr, length);
   }
 }
 
@@ -406,12 +397,7 @@ NSR_TakeSourcesOnline(IPAddr *mask, IPAddr *address)
   int i;
   int any;
 
-  /* Try to resolve unresolved sources now */
-  if (resolving_interval) {
-    SCH_RemoveTimeout(resolving_id);
-    resolving_interval--;
-    resolve_sources(NULL);
-  }
+  NSR_ResolveSources();
 
   any = 0;
   for (i=0; i<N_RECORDS; i++) {
@@ -674,12 +660,11 @@ NSR_GetActivityReport(RPT_ActivityReport *report)
     }
   }
 
-  /* Add unresolved sources to offline count */
-  for (us = unresolved_sources; us; us = us->next) {
-    report->offline++;
-  }
+  report->unresolved = 0;
 
-  return;
+  for (us = unresolved_sources; us; us = us->next) {
+    report->unresolved++;
+  }
 }
 
 

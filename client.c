@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009-2011
+ * Copyright (C) Miroslav Lichvar  2009-2013
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -32,7 +32,7 @@
 
 #include "candm.h"
 #include "nameserv.h"
-#include "md5.h"
+#include "hash.h"
 #include "getdate.h"
 #include "cmdparse.h"
 #include "pktlength.h"
@@ -46,12 +46,6 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 #endif
-#endif
-
-#ifdef HAS_STDINT_H
-#include <stdint.h>
-#elif defined(HAS_INTTYPES_H)
-#include <inttypes.h>
 #endif
 
 /* ================================================== */
@@ -127,7 +121,7 @@ read_line(void)
     }
     return( line );
 #else
-    printf(prompt);
+    printf("%s", prompt);
 #endif
   }
   if (fgets(line, sizeof(line), stdin)) {
@@ -182,8 +176,6 @@ open_io(const char *hostname, int port)
     perror("Can't create socket");
     exit(1);
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -239,7 +231,6 @@ read_mask_address(char *line, IPAddr *mask, IPAddr *address)
   char *p, *q;
 
   p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
   if (!*p) {
     mask->family = address->family = IPADDR_UNSPEC;
     return 1;
@@ -249,8 +240,6 @@ read_mask_address(char *line, IPAddr *mask, IPAddr *address)
       *q++ = 0;
       if (UTI_StringToIP(p, mask)) {
         p = q;
-        while (*q && !isspace((unsigned char)*q)) q++;
-        *q = 0;
         if (UTI_StringToIP(p, address)) {
           if (address->family == mask->family)
             return 1;
@@ -261,9 +250,12 @@ read_mask_address(char *line, IPAddr *mask, IPAddr *address)
         }
       }
     } else {
-      if (UTI_StringToIP(p, address)) {
+      if (DNS_Name2IPAddress(p, address) == DNS_Success) {
         bits_to_mask(-1, address->family, mask);
         return 1;
+      } else {
+        fprintf(stderr, "Could not get address for hostname\n");
+        return 0;
       }
     }
   }
@@ -320,10 +312,13 @@ process_cmd_online(CMD_Request *msg, char *line)
 static int
 read_address_integer(char *line, IPAddr *address, int *value)
 {
-  char hostname[2048];
+  char *hostname;
   int ok = 0;
 
-  if (sscanf(line, "%2047s %d", hostname, value) != 2) {
+  hostname = line;
+  line = CPS_SplitWord(line);
+
+  if (sscanf(line, "%d", value) != 1) {
     fprintf(stderr, "Invalid syntax for address value\n");
     ok = 0;
   } else {
@@ -345,10 +340,13 @@ read_address_integer(char *line, IPAddr *address, int *value)
 static int
 read_address_double(char *line, IPAddr *address, double *value)
 {
-  char hostname[2048];
+  char *hostname;
   int ok = 0;
 
-  if (sscanf(line, "%2047s %lf", hostname, value) != 2) {
+  hostname = line;
+  line = CPS_SplitWord(line);
+
+  if (sscanf(line, "%lf", value) != 1) {
     fprintf(stderr, "Invalid syntax for address value\n");
     ok = 0;
   } else {
@@ -545,6 +543,7 @@ static void
 process_cmd_dump(CMD_Request *msg, char *line)
 {
   msg->command = htons(REQ_DUMP);
+  msg->data.dump.pad = htonl(0);
 }
 
 /* ================================================== */
@@ -577,22 +576,26 @@ static int
 process_cmd_burst(CMD_Request *msg, char *line)
 {
   int n_good_samples, n_total_samples;
-  int n_parsed;
-  char s[101];
+  char *s1, *s2;
   IPAddr address, mask;
 
-  n_parsed = sscanf(line, "%d/%d %100s", &n_good_samples, &n_total_samples, s);
+  s1 = line;
+  s2 = CPS_SplitWord(s1);
+  CPS_SplitWord(s2);
+
+  if (sscanf(s1, "%d/%d", &n_good_samples, &n_total_samples) != 2) {
+    fprintf(stderr, "Invalid syntax for burst command\n");
+    return 0;
+  }
+
+  mask.family = address.family = IPADDR_UNSPEC;
+  if (*s2 && !read_mask_address(s2, &mask, &address)) {
+    return 0;
+  }
 
   msg->command = htons(REQ_BURST);
   msg->data.burst.n_good_samples = ntohl(n_good_samples);
   msg->data.burst.n_total_samples = ntohl(n_total_samples);
-
-  mask.family = address.family = IPADDR_UNSPEC;
-
-  if (n_parsed < 2 || (n_parsed == 3 && !read_mask_address(s, &mask, &address))) {
-    fprintf(stderr, "Invalid syntax for burst command\n");
-    return 0;
-  }
 
   UTI_IPHostToNetwork(&mask, &msg->data.burst.mask);
   UTI_IPHostToNetwork(&address, &msg->data.burst.address);
@@ -609,12 +612,12 @@ process_cmd_local(CMD_Request *msg, const char *line)
   int stratum;
 
   p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
   
   if (!*p) {
     return 0;
-  } else if (!strncmp(p, "off", 3)) {
+  } else if (!strcmp(p, "off")) {
     msg->data.local.on_off = htonl(0);
+    msg->data.local.stratum = htonl(0);
   } else if (sscanf(p, "stratum%d", &stratum) == 1) {
     msg->data.local.on_off = htonl(1);
     msg->data.local.stratum = htonl(stratum);
@@ -635,15 +638,14 @@ process_cmd_manual(CMD_Request *msg, const char *line)
   const char *p;
 
   p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
 
   if (!*p) {
     return 0;
-  } else if (!strncmp(p, "off", 3)) {
+  } else if (!strcmp(p, "off")) {
     msg->data.manual.option = htonl(0);
-  } else if (!strncmp(p, "on", 2)) {
+  } else if (!strcmp(p, "on")) {
     msg->data.manual.option = htonl(1);
-  } else if (!strncmp(p, "reset", 5)) {
+  } else if (!strcmp(p, "reset")) {
     msg->data.manual.option = htonl(2);
   } else {
     return 0;
@@ -660,10 +662,9 @@ parse_allow_deny(CMD_Request *msg, char *line)
 {
   unsigned long a, b, c, d, n;
   IPAddr ip;
-  char *p, *q;
+  char *p;
   
   p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
   if (!*p) {
     /* blank line - applies to all addresses */
     ip.family = IPADDR_UNSPEC;
@@ -679,11 +680,6 @@ parse_allow_deny(CMD_Request *msg, char *line)
         (n = sscanf(p, "%lu.%lu.%lu.%lu", &a, &b, &c, &d)) == 0) {
 
       /* Try to parse as the name of a machine */
-      q = p;
-      while (*q) {
-        if (*q == '\n') *q = 0;
-        q++;
-      }
       if (DNS_Name2IPAddress(p, &ip) != DNS_Success) {
         fprintf(stderr, "Could not read address\n");
         return 0;
@@ -842,9 +838,8 @@ accheck_getaddr(char *line, IPAddr *addr)
 {
   unsigned long a, b, c, d;
   IPAddr ip;
-  char *p, *q;
+  char *p;
   p = line;
-  while (*p && isspace(*p)) p++;
   if (!*p) {
     return 0;
   } else {
@@ -853,11 +848,6 @@ accheck_getaddr(char *line, IPAddr *addr)
       addr->addr.in4 = (a<<24) | (b<<16) | (c<<8) | d;
       return 1;
     } else {
-      q = p;
-      while (*q) {
-        if (*q == '\n') *q = 0;
-        q++;
-      }
       if (DNS_Name2IPAddress(p, &ip) != DNS_Success) {
         return 0;
       } else {
@@ -932,7 +922,6 @@ cvt_to_sec_usec(double x, long *sec, long *usec) {
   
   *sec = s;
   *usec = us;
-  return;
 }
 
 /* ================================================== */
@@ -960,17 +949,18 @@ process_cmd_add_server_or_peer(CMD_Request *msg, char *line)
 {
   CPS_NTP_Source data;
   CPS_Status status;
+  IPAddr ip_addr;
   int result = 0;
   
   status = CPS_ParseNTPSourceAdd(line, &data);
   switch (status) {
     case CPS_Success:
-      /* Don't retry name resolving */
-      if (data.ip_addr.family == IPADDR_UNSPEC) {
+      if (DNS_Name2IPAddress(data.name, &ip_addr) != DNS_Success) {
         Free(data.name);
         fprintf(stderr, "Invalid host/IP address\n");
         break;
       }
+      Free(data.name);
 
       if (data.params.min_stratum != SRC_DEFAULT_MINSTRATUM) {
         fprintf(stderr, "Option minstratum not supported\n");
@@ -988,7 +978,7 @@ process_cmd_add_server_or_peer(CMD_Request *msg, char *line)
       }
 
       msg->data.ntp_source.port = htonl((unsigned long) data.port);
-      UTI_IPHostToNetwork(&data.ip_addr, &msg->data.ntp_source.ip_addr);
+      UTI_IPHostToNetwork(&ip_addr, &msg->data.ntp_source.ip_addr);
       msg->data.ntp_source.minpoll = htonl(data.params.minpoll);
       msg->data.ntp_source.maxpoll = htonl(data.params.maxpoll);
       msg->data.ntp_source.presend_minpoll = htonl(data.params.presend_minpoll);
@@ -1068,13 +1058,15 @@ process_cmd_add_peer(CMD_Request *msg, char *line)
 static int
 process_cmd_delete(CMD_Request *msg, char *line)
 {
-  char hostname[2048];
+  char *hostname;
   int ok = 0;
   IPAddr address;
 
   msg->command = htons(REQ_DEL_SOURCE);
+  hostname = line;
+  CPS_SplitWord(line);
 
-  if (sscanf(line, "%2047s", hostname) != 1) {
+  if (!*hostname) {
     fprintf(stderr, "Invalid syntax for address\n");
     ok = 0;
   } else {
@@ -1093,49 +1085,54 @@ process_cmd_delete(CMD_Request *msg, char *line)
 
 /* ================================================== */
 
-static int password_seen = 0;
-static MD5_CTX md5_after_just_password;
+static char *password = NULL;
+static int password_length;
+static int auth_hash_id;
 
 /* ================================================== */
 
 static int
 process_cmd_password(CMD_Request *msg, char *line)
 {
-  char *p, *q;
-  char *password;
+  char *p;
   struct timeval now;
+  int i, len;
+
+  /* Blank and free the old password */
+  if (password) {
+    for (i = 0; i < password_length; i++)
+      password[i] = 0;
+    free(password);
+    password = NULL;
+  }
 
   p = line;
-  while (*p && isspace((unsigned char)*p))
-    p++;
 
-  /* Get rid of trailing newline */
-  for (q=p; *q; q++) {
-    if (isspace((unsigned char)*q)) *q = 0;
-  }
-
-  if (*p) {
-    password = p;
-  } else {
+  if (!*p) {
     /* blank line, prompt for password */
-    password = getpass("Password: ");
+    p = getpass("Password: ");
   }
 
-  if (!*password) {
-    password_seen = 0;
-  } else {
-    password_seen = 1;
+  if (!*p)
+    return 0;
+
+  len = strlen(p);
+  password_length = UTI_DecodePasswordFromText(p);
+
+  if (password_length > 0) {
+    password = malloc(password_length);
+    memcpy(password, p, password_length);
   }
 
-  /* Generate MD5 initial context */
-  MD5Init(&md5_after_just_password);
-  MD5Update(&md5_after_just_password, (unsigned char *) password, strlen(password));
-  
-  /* Blank the password for security */
-  for (p = password; *p; p++) {
-    *p = 0;
+  /* Erase the password from the input or getpass buffer */
+  for (i = 0; i < len; i++)
+    p[i] = 0;
+
+  if (password_length <= 0) {
+      fprintf(stderr, "Could not decode password\n");
+      return 0;
   }
-    
+
   if (gettimeofday(&now, NULL) < 0) {
     printf("500 - Could not read time of day\n");
     return 0;
@@ -1148,43 +1145,33 @@ process_cmd_password(CMD_Request *msg, char *line)
 
 /* ================================================== */
 
-static void
+static int
 generate_auth(CMD_Request *msg)
 {
-  MD5_CTX ctx;
-  int pkt_len;
+  int data_len;
 
-  pkt_len = PKL_CommandLength(msg);
-  ctx = md5_after_just_password;
-  MD5Update(&ctx, (unsigned char *) msg, offsetof(CMD_Request, auth));
-  if (pkt_len > offsetof(CMD_Request, data)) {
-    MD5Update(&ctx, (unsigned char *) &(msg->data), pkt_len - offsetof(CMD_Request, data));
-  }
-  MD5Final(&ctx);
-  memcpy(&(msg->auth), &ctx.digest, 16);
+  data_len = PKL_CommandLength(msg);
+
+  assert(auth_hash_id >= 0);
+
+  return UTI_GenerateNTPAuth(auth_hash_id, (unsigned char *)password, password_length,
+      (unsigned char *)msg, data_len, ((unsigned char *)msg) + data_len, sizeof (msg->auth));
 }
 
 /* ================================================== */
 
 static int
-check_reply_auth(CMD_Reply *msg)
+check_reply_auth(CMD_Reply *msg, int len)
 {
-  int pkt_len;
-  MD5_CTX ctx;
+  int data_len;
 
-  pkt_len = PKL_ReplyLength(msg);
-  ctx = md5_after_just_password;
-  MD5Update(&ctx, (unsigned char *) msg, offsetof(CMD_Request, auth));
-  if (pkt_len > offsetof(CMD_Reply, data)) {
-    MD5Update(&ctx, (unsigned char *) &(msg->data), pkt_len - offsetof(CMD_Reply, data));
-  }
-  MD5Final(&ctx);
+  data_len = PKL_ReplyLength(msg);
 
-  if (!memcmp((void *) &ctx.digest, (void *) &(msg->auth), 16)) {
-    return 1;
-  } else {
-    return 0;
-  }
+  assert(auth_hash_id >= 0);
+
+  return UTI_CheckNTPAuth(auth_hash_id, (unsigned char *)password, password_length,
+      (unsigned char *)msg, data_len,
+      ((unsigned char *)msg) + data_len, len - data_len);
 }
 
 /* ================================================== */
@@ -1237,6 +1224,7 @@ give_help(void)
   printf("waitsync [max-tries [max-correction [max-skew]]] : Wait until synchronised\n");
   printf("writertc : Save RTC parameters to file\n");
   printf("\n");
+  printf("authhash <name>: Set command authentication hash function\n");
   printf("dns -n|+n : Disable/enable resolving IP addresses to hostnames\n");
   printf("dns -4|-6|-46 : Resolve hostnames only to IPv4/IPv6/both addresses\n");
   printf("timeout <milliseconds> : Set initial response timeout\n");
@@ -1272,6 +1260,7 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
   int read_length;
   int expected_length;
   int command_length;
+  int auth_length;
   struct timeval tv;
   int timeout;
   int n_attempts;
@@ -1294,25 +1283,32 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
   do {
 
     /* Decide whether to authenticate */
-    if (password_seen) {
+    if (password) {
       if (!utoken || (request->command == htons(REQ_LOGON))) {
         /* Otherwise, the daemon won't bother authenticating our
            packet and we won't get a token back */
         request->utoken = htonl(SPECIAL_UTOKEN);
       }
-      generate_auth(request);
+      auth_length = generate_auth(request);
     } else {
-      memset(request->auth, 0, sizeof (request->auth));
+      auth_length = 0;
     }
 
     command_length = PKL_CommandLength(request);
     assert(command_length > 0);
 
+    /* add empty MD5 auth so older servers will not drop the request
+       due to bad length */
+    if (!auth_length) {
+      memset(((char *)request) + command_length, 0, 16);
+      auth_length = 16;
+    }
+
 #if 0
-    printf("Sent command length=%d bytes\n", command_length);
+    printf("Sent command length=%d bytes auth length=%d bytes\n", command_length, auth_length);
 #endif
 
-    if (sendto(sock_fd, (void *) request, command_length, 0,
+    if (sendto(sock_fd, (void *) request, command_length + auth_length, 0,
                &his_addr.u, his_addr_len) < 0) {
 
 
@@ -1375,7 +1371,8 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
         read_length = recvfrom_status;
         expected_length = PKL_ReplyLength(reply);
 
-        bad_length = (read_length != expected_length);
+        bad_length = (read_length < expected_length ||
+                      expected_length < offsetof(CMD_Reply, data));
         bad_sender = (where_from.u.sa_family != his_addr.u.sa_family ||
                       (where_from.u.sa_family == AF_INET &&
                        (where_from.in4.sin_addr.s_addr != his_addr.in4.sin_addr.s_addr ||
@@ -1429,8 +1426,8 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
                ntohl(reply->token));
 #endif
 
-        if (password_seen) {
-          *reply_auth_ok = check_reply_auth(reply);
+        if (password) {
+          *reply_auth_ok = check_reply_auth(reply, read_length);
         } else {
           /* Assume in this case that the reply is always considered
              to be authentic */
@@ -1657,8 +1654,7 @@ static int
 check_for_verbose_flag(char *line)
 {
   char *p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
-  if (!strncmp(p, "-v", 2)) {
+  if (!strcmp(p, "-v")) {
     return 1;
   } else {
     return 0;
@@ -1679,7 +1675,7 @@ process_cmd_sources(char *line)
   IPAddr ip_addr;
   uint32_t latest_meas_ago;
   uint16_t poll, stratum;
-  uint16_t state, mode;
+  uint16_t state, mode, flags, reachability;
   char hostname_buf[50];
 
   /* Check whether to output verbose headers */
@@ -1692,8 +1688,8 @@ process_cmd_sources(char *line)
     if (verbose) {
       printf("\n");
       printf("  .-- Source mode  '^' = server, '=' = peer, '#' = local clock.\n");
-      printf(" / .- Source state '*' = current synced, '+' = OK for sync, '?' = unreachable,\n");
-      printf("| /                'x' = time may be in error, '~' = time is too variable.\n");
+      printf(" / .- Source state '*' = current synced, '+' = combined , '-' = not combined,\n");
+      printf("| /   '?' = unreachable, 'x' = time may be in error, '~' = time too variable.\n");
       printf("||                                                 .- xxxx [ yyyy ] +/- zzzz\n");
       printf("||                                                /   xxxx = adjusted offset,\n");
       printf("||         Log2(Polling interval) -.             |    yyyy = measured offset,\n");
@@ -1701,10 +1697,10 @@ process_cmd_sources(char *line)
       printf("||                                   |           |                         \n");
     }
 
-    printf("MS Name/IP address           Stratum Poll LastRx Last sample\n");
-    printf("============================================================================\n");
+    printf("MS Name/IP address         Stratum Poll Reach LastRx Last sample\n");
+    printf("===============================================================================\n");
 
-    /*     "MS NNNNNNNNNNNNNNNNNNNNNNNNN    SS   PP   RRRR  SSSSSSS[SSSSSSS] +/- SSSSSS" */
+    /*     "MS NNNNNNNNNNNNNNNNNNNNNNNNNNN  SS  PP   RRR  RRRR  SSSSSSS[SSSSSSS] +/- SSSSSS" */
 
     for (i=0; i<n_sources; i++) {
       request.command = htons(REQ_SOURCE_DATA);
@@ -1715,6 +1711,8 @@ process_cmd_sources(char *line)
           stratum = ntohs(reply.data.source_data.stratum);
           state = ntohs(reply.data.source_data.state);
           mode = ntohs(reply.data.source_data.mode);
+          flags = ntohs(reply.data.source_data.flags);
+          reachability = ntohs(reply.data.source_data.reachability);
           latest_meas_ago = ntohl(reply.data.source_data.since_sample);
           orig_latest_meas = UTI_FloatNetworkToHost(reply.data.source_data.orig_latest_meas);
           latest_meas = UTI_FloatNetworkToHost(reply.data.source_data.latest_meas);
@@ -1750,13 +1748,17 @@ process_cmd_sources(char *line)
               printf("~"); break;
             case RPY_SD_ST_CANDIDATE:
               printf("+"); break;
-            case RPY_SD_ST_OUTLYER:
+            case RPY_SD_ST_OUTLIER:
               printf("-"); break;
             default:
               printf(" ");
           }
+          switch (flags) {
+            default:
+              break;
+          }
 
-          printf(" %-25s    %2d   %2d   ", hostname_buf, stratum, poll);
+          printf(" %-27s  %2d  %2d   %3o  ", hostname_buf, stratum, poll, reachability);
           print_seconds(latest_meas_ago);
           printf("  ");
           print_signed_nanoseconds(latest_meas);
@@ -1875,11 +1877,15 @@ process_cmd_tracking(char *line)
   struct tm ref_time_tm;
   unsigned long a, b, c, d;
   double correction;
+  double last_offset;
+  double rms_offset;
   double freq_ppm;
   double resid_freq_ppm;
   double skew_ppm;
   double root_delay;
   double root_dispersion;
+  double last_update_interval;
+  const char *leap_status;
   
   request.command = htons(REQ_TRACKING);
   if (request_reply(&request, &reply, RPY_TRACKING, 0)) {
@@ -1899,24 +1905,49 @@ process_cmd_tracking(char *line)
       ref_ip = host;
     }
     
+    switch (ntohs(reply.data.tracking.leap_status)) {
+      case LEAP_Normal:
+        leap_status = "Normal";
+        break;
+      case LEAP_InsertSecond:
+        leap_status = "Insert second";
+        break;
+      case LEAP_DeleteSecond:
+        leap_status = "Delete second";
+        break;
+      case LEAP_Unsynchronised:
+        leap_status = "Not synchronised";
+        break;
+      default:
+        leap_status = "Unknown";
+        break;
+    }
+
     printf("Reference ID    : %lu.%lu.%lu.%lu (%s)\n", a, b, c, d, ref_ip);
-    printf("Stratum         : %lu\n", (unsigned long) ntohl(reply.data.tracking.stratum));
+    printf("Stratum         : %lu\n", (unsigned long) ntohs(reply.data.tracking.stratum));
     UTI_TimevalNetworkToHost(&reply.data.tracking.ref_time, &ref_time);
     ref_time_tm = *gmtime((time_t *)&ref_time.tv_sec);
     printf("Ref time (UTC)  : %s", asctime(&ref_time_tm));
     correction = UTI_FloatNetworkToHost(reply.data.tracking.current_correction);
+    last_offset = UTI_FloatNetworkToHost(reply.data.tracking.last_offset);
+    rms_offset = UTI_FloatNetworkToHost(reply.data.tracking.rms_offset);
     printf("System time     : %.9f seconds %s of NTP time\n", fabs(correction),
            (correction > 0.0) ? "slow" : "fast");
+    printf("Last offset     : %.9f seconds\n", last_offset);
+    printf("RMS offset      : %.9f seconds\n", rms_offset);
     freq_ppm = UTI_FloatNetworkToHost(reply.data.tracking.freq_ppm);
     resid_freq_ppm = UTI_FloatNetworkToHost(reply.data.tracking.resid_freq_ppm);
     skew_ppm = UTI_FloatNetworkToHost(reply.data.tracking.skew_ppm);
     root_delay = UTI_FloatNetworkToHost(reply.data.tracking.root_delay);
     root_dispersion = UTI_FloatNetworkToHost(reply.data.tracking.root_dispersion);
+    last_update_interval = UTI_FloatNetworkToHost(reply.data.tracking.last_update_interval);
     printf("Frequency       : %.3f ppm %s\n", fabs(freq_ppm), (freq_ppm < 0.0) ? "slow" : "fast"); 
     printf("Residual freq   : %.3f ppm\n", resid_freq_ppm);
     printf("Skew            : %.3f ppm\n", skew_ppm);
     printf("Root delay      : %.6f seconds\n", root_delay);
     printf("Root dispersion : %.6f seconds\n", root_dispersion);
+    printf("Update interval : %.1f seconds\n", last_update_interval);
+    printf("Leap status     : %s\n", leap_status);
     return 1;
   }
   return 0;
@@ -1959,207 +1990,6 @@ process_cmd_rtcreport(char *line)
 }
 
 /* ================================================== */
-
-#if 0
-
-/* This is a previous attempt at implementing the clients command.  It
-   could be re-instated sometime as a way of looking at all clients in a
-   particular subnet.  The problem with it is that is requires at least 5
-   round trips to the server even if the server only has one client to
-   report. */
-
-typedef struct XSubnetToDo {
-  struct XSubnetToDo *next;
-  unsigned long ip;
-  unsigned long bits;
-} SubnetToDo;
-
-static void
-process_cmd_clients(char *line)
-{
-  CMD_Request request;
-  CMD_Reply reply;
-  SubnetToDo *head, *todo, *tail, *p, *next_node, *new_node;
-  int i, j, nets_looked_up, clients_looked_up;
-  int word;
-  unsigned long mask;
-  unsigned long ip, bits;
-  unsigned long client_hits;
-  unsigned long peer_hits;
-  unsigned long cmd_hits_auth;
-  unsigned long cmd_hits_normal;
-  unsigned long cmd_hits_bad;
-  unsigned long last_ntp_hit_ago;
-  unsigned long last_cmd_hit_ago;
-  char hostname_buf[50];
-
-  int n_replies;
-
-  head = todo = MallocNew(SubnetToDo);
-  todo->next = NULL;
-  /* Set up initial query = root subnet */
-  todo->ip = 0;
-  todo->bits = 0;
-  tail = todo;
-
-  do {
-
-    request.command = htons(REQ_SUBNETS_ACCESSED);
-    /* Build list of subnets to examine */
-    i=0;
-    p=todo;
-    while((i < MAX_SUBNETS_ACCESSED) &&
-          p &&
-          (p->bits < 32)) {
-      
-      request.data.subnets_accessed.subnets[i].ip = htonl(p->ip);
-      request.data.subnets_accessed.subnets[i].bits_specd = htonl(p->bits);
-      p = p->next;
-      i++;
-    }         
-
-    nets_looked_up = i;
-
-    if (nets_looked_up == 0) {
-      /* No subnets need examining */
-      break;
-    }
-
-    request.data.subnets_accessed.n_subnets = htonl(nets_looked_up);
-
-    if (request_reply(&request, &reply, RPY_SUBNETS_ACCESSED, 0)) {
-          n_replies = ntohl(reply.data.subnets_accessed.n_subnets);
-          for (j=0; j<n_replies; j++) {
-            ip = ntohl(reply.data.subnets_accessed.subnets[j].ip);
-            bits = ntohl(reply.data.subnets_accessed.subnets[j].bits_specd);
-            for (i=0; i<256; i++) {
-              word = i/32;
-              mask = 1UL << (i%32);
-              if (ntohl(reply.data.subnets_accessed.subnets[j].bitmap[word]) & mask) {
-                /* Add this subnet to the todo list */
-                new_node = MallocNew(SubnetToDo);
-                new_node->next = NULL;
-                new_node->bits = bits + 8;
-                new_node->ip = ip | (i << (24 - bits));
-                tail->next = new_node;
-                tail = new_node;
-#if 0
-                printf("%08lx %2d %3d %08lx\n", ip, bits, i, new_node->ip);
-#endif
-              }
-            }
-          }
-
-          /* Skip the todo pointer forwards by the number of nets looked
-             up.  Can't do this earlier, because we might have to point
-             at the next layer of subnets that have only just been
-             concatenated to the linked list. */
-          for (i=0; i<nets_looked_up; i++) {
-            todo = todo->next;
-          }
-          
-      }
-      
-    } else {
-      return;
-    }
-  } while (1); /* keep going until all subnets have been expanded,
-                  down to single nodes */
-
-  /* Now the todo list consists of client records */
-  request.command = htons(REQ_CLIENT_ACCESSES);
-
-#if 0
-  printf("%d %d\n", sizeof (RPY_ClientAccesses_Client), offsetof(CMD_Reply, data.client_accesses.clients));
-#endif
-
-  printf("Hostname                   Client    Peer CmdAuth CmdNorm  CmdBad  LstN  LstC\n"
-         "=========================  ======  ======  ======  ======  ======  ====  ====\n");
-
-  do {
-
-    i = 0;
-    p = todo;
-    while ((i < MAX_CLIENT_ACCESSES) &&
-           p) {
-
-      request.data.client_accesses.client_ips[i] = htonl(p->ip);
-      p = p->next;
-      i++;
-    }
-
-    clients_looked_up = i;
-
-    if (clients_looked_up == 0) {
-      /* No more clients to do */
-      break;
-    }
-
-    request.data.client_accesses.n_clients = htonl(clients_looked_up);
-
-    if (request_reply(&request, &reply, RPY_CLIENT_ACCESSES, 0)) {
-          n_replies = ntohl(reply.data.client_accesses.n_clients);
-          for (j=0; j<n_replies; j++) {
-            ip = ntohl(reply.data.client_accesses.clients[j].ip);
-            if (ip != 0UL) {
-              /* ip == 0 implies that the node could not be found in
-                 the daemon's tables; we shouldn't ever generate this
-                 case, but ignore it if we do.  (In future there might
-                 be a protocol to reset the client logging; if another
-                 administrator runs that while we're doing the clients
-                 command, there will be a race condition that could
-                 cause this). */
-              
-              client_hits = ntohl(reply.data.client_accesses.clients[j].client_hits);
-              peer_hits = ntohl(reply.data.client_accesses.clients[j].peer_hits);
-              cmd_hits_auth = ntohl(reply.data.client_accesses.clients[j].cmd_hits_auth);
-              cmd_hits_normal = ntohl(reply.data.client_accesses.clients[j].cmd_hits_normal);
-              cmd_hits_bad = ntohl(reply.data.client_accesses.clients[j].cmd_hits_bad);
-              last_ntp_hit_ago = ntohl(reply.data.client_accesses.clients[j].last_ntp_hit_ago);
-              last_cmd_hit_ago = ntohl(reply.data.client_accesses.clients[j].last_cmd_hit_ago);
-
-              if (no_dns) {
-                snprintf(hostname_buf, sizeof(hostname_buf), 
-                         "%s", UTI_IPToDottedQuad(ip));
-              } else {
-                DNS_IPAddress2Name(ip, hostname_buf, sizeof(hostname_buf));
-                hostname_buf[25] = 0;
-              }
-              printf("%-25s  %6d  %6d  %6d  %6d  %6d  ",
-                     hostname_buf,
-                     client_hits, peer_hits,
-                     cmd_hits_auth, cmd_hits_normal, cmd_hits_bad);
-              print_seconds(last_ntp_hit_ago);
-              printf("  ");
-              print_seconds(last_cmd_hit_ago);
-              printf("\n");
-            }
-          }              
-
-          /* Skip the todo pointer forwards by the number of nets looked
-             up.  Can't do this earlier, because we might have to point
-             at the next layer of subnets that have only just been
-             concatenated to the linked list. */
-          for (i=0; i<clients_looked_up; i++) {
-            todo = todo->next;
-          }
-
-    }
-  
-  } while (1);
-  
-cleanup:
-  for (p = head; p; ) {
-    next_node = p->next;
-    Free(p);
-    p = next_node;
-  }
-  
-}
-
-#endif
-
-/* New implementation of clients command */
 
 static int
 process_cmd_clients(char *line)
@@ -2326,7 +2156,7 @@ process_cmd_settime(char *line)
     request.command = htons(REQ_SETTIME);
     if (request_reply(&request, &reply, RPY_MANUAL_TIMESTAMP, 1)) {
           offset_cs = ntohl(reply.data.manual_timestamp.centiseconds);
-          offset = 0.01 * (double) offset_cs;
+          offset = 0.01 * (double)(int32_t)offset_cs;
           dfreq_ppm = UTI_FloatNetworkToHost(reply.data.manual_timestamp.dfreq_ppm);
           new_afreq_ppm = UTI_FloatNetworkToHost(reply.data.manual_timestamp.new_afreq_ppm);
           printf("Clock was %.2f seconds fast.  Frequency change = %.2fppm, new frequency = %.2fppm\n",
@@ -2366,11 +2196,13 @@ process_cmd_activity(const char *line)
                "%ld sources online\n"
                "%ld sources offline\n"
                "%ld sources doing burst (return to online)\n"
-               "%ld sources doing burst (return to offline)\n",
+               "%ld sources doing burst (return to offline)\n"
+               "%ld sources with unknown address\n",
                 (long) ntohl(reply.data.activity.online),
                 (long) ntohl(reply.data.activity.offline),
                 (long) ntohl(reply.data.activity.burst_online),
-                (long) ntohl(reply.data.activity.burst_offline));
+                (long) ntohl(reply.data.activity.burst_offline),
+                (long) ntohl(reply.data.activity.unresolved));
         return 1;
   }
   return 0;
@@ -2456,20 +2288,47 @@ process_cmd_waitsync(char *line)
 static int
 process_cmd_dns(const char *line)
 {
-  if (!strncmp(line, "-46", 3)) {
+  if (!strcmp(line, "-46")) {
     DNS_SetAddressFamily(IPADDR_UNSPEC);
-  } else if (!strncmp(line, "-4", 2)) {
+  } else if (!strcmp(line, "-4")) {
     DNS_SetAddressFamily(IPADDR_INET4);
-  } else if (!strncmp(line, "-6", 2)) {
+  } else if (!strcmp(line, "-6")) {
     DNS_SetAddressFamily(IPADDR_INET6);
-  } else if (!strncmp(line, "-n", 2)) {
+  } else if (!strcmp(line, "-n")) {
     no_dns = 1;
-  } else if (!strncmp(line, "+n", 2)) {
+  } else if (!strcmp(line, "+n")) {
     no_dns = 0;
   } else {
     fprintf(stderr, "Unrecognized dns command\n");
     return 0;
   }
+  return 1;
+}
+
+/* ================================================== */
+
+static int
+process_cmd_authhash(const char *line)
+{
+  const char *hash_name;
+  int new_hash_id;
+
+  assert(auth_hash_id >= 0);
+  hash_name = line;
+
+  if (!*hash_name) {
+    fprintf(stderr, "Could not parse hash name\n");
+    return 0;
+  }
+
+  new_hash_id = HSH_GetHashId(hash_name);
+  if (new_hash_id < 0) {
+    fprintf(stderr, "Unknown hash name: %s\n", hash_name);
+    return 0;
+  }
+
+  auth_hash_id = new_hash_id;
+
   return 1;
 }
 
@@ -2510,7 +2369,7 @@ process_cmd_retries(const char *line)
 static int
 process_line(char *line, int *quit)
 {
-  char *p;
+  char *command;
   int do_normal_submit;
   int ret;
   CMD_Request tx_message;
@@ -2521,139 +2380,155 @@ process_line(char *line, int *quit)
 
   do_normal_submit = 1;
 
-  /* Check for line being blank */
-  p = line;
-  while (*p && isspace((unsigned char)*p)) p++;
-  if (!*p) {
+  CPS_NormalizeLine(line);
+
+  if (!*line) {
     fflush(stderr);
     fflush(stdout);
-    return ret;
+    return 1;
   };
 
-  if (!strncmp(p, "offline", 7)) {
-    do_normal_submit = process_cmd_offline(&tx_message, p+7);
-  } else if (!strncmp(p, "online", 6)) {
-    do_normal_submit = process_cmd_online(&tx_message, p+6);
-  } else if (!strncmp(p, "burst", 5)) {
-    do_normal_submit = process_cmd_burst(&tx_message, p+5);
-  } else if (!strncmp(p, "password", 8)) {
-    do_normal_submit = process_cmd_password(&tx_message, p+8);
-  } else if (!strncmp(p, "minpoll", 7)) {
-    do_normal_submit = process_cmd_minpoll(&tx_message, p+7);
-  } else if (!strncmp(p, "maxpoll", 7)) {
-    do_normal_submit = process_cmd_maxpoll(&tx_message, p+7);
-  } else if (!strncmp(p, "dump", 4)) {
-    process_cmd_dump(&tx_message, p+4);
-  } else if (!strncmp(p, "maxdelaydevratio", 16)) {
-    do_normal_submit = process_cmd_maxdelaydevratio(&tx_message, p+16);
-  } else if (!strncmp(p, "maxdelayratio", 13)) {
-    do_normal_submit = process_cmd_maxdelayratio(&tx_message, p+13);
-  } else if (!strncmp(p, "maxdelay", 8)) {
-    do_normal_submit = process_cmd_maxdelay(&tx_message, p+8);
-  } else if (!strncmp(p, "maxupdateskew", 13)) {
-    do_normal_submit = process_cmd_maxupdateskew(&tx_message, p+13);
-  } else if (!strncmp(p, "minstratum", 10)) {
-    do_normal_submit = process_cmd_minstratum(&tx_message, p+10);
-  } else if (!strncmp(p, "polltarget", 10)) {
-    do_normal_submit = process_cmd_polltarget(&tx_message, p+10);
-  } else if (!strncmp(p, "settime", 7)) {
+  command = line;
+  line = CPS_SplitWord(line);
+
+  if (!strcmp(command, "accheck")) {
+    do_normal_submit = process_cmd_accheck(&tx_message, line);
+  } else if (!strcmp(command, "activity")) {
     do_normal_submit = 0;
-    ret = process_cmd_settime(p+7);
-  } else if (!strncmp(p, "local", 5)) {
-    do_normal_submit = process_cmd_local(&tx_message, p+5);
-  } else if (!strncmp(p, "manual list", 11)) {
+    ret = process_cmd_activity(line);
+  } else if (!strcmp(command, "add") && !strncmp(line, "peer", 4)) {
+    do_normal_submit = process_cmd_add_peer(&tx_message, CPS_SplitWord(line));
+  } else if (!strcmp(command, "add") && !strncmp(line, "server", 6)) {
+    do_normal_submit = process_cmd_add_server(&tx_message, CPS_SplitWord(line));
+  } else if (!strcmp(command, "allow")) {
+    if (!strncmp(line, "all", 3)) {
+      do_normal_submit = process_cmd_allowall(&tx_message, CPS_SplitWord(line));
+    } else {
+      do_normal_submit = process_cmd_allow(&tx_message, line);
+    }
+  } else if (!strcmp(command, "authhash")) {
+    ret = process_cmd_authhash(line);
     do_normal_submit = 0;
-    ret = process_cmd_manual_list(p+11);
-  } else if (!strncmp(p, "manual delete", 13)) {
-    do_normal_submit = process_cmd_manual_delete(&tx_message, p+13);
-  } else if (!strncmp(p, "manual", 6)) {
-    do_normal_submit = process_cmd_manual(&tx_message, p+6);
-  } else if (!strncmp(p, "sourcestats", 11)) {
+  } else if (!strcmp(command, "burst")) {
+    do_normal_submit = process_cmd_burst(&tx_message, line);
+  } else if (!strcmp(command, "clients")) {
+    ret = process_cmd_clients(line);
     do_normal_submit = 0;
-    ret = process_cmd_sourcestats(p+11);
-  } else if (!strncmp(p, "sources", 7)) {
+  } else if (!strcmp(command, "cmdaccheck")) {
+    do_normal_submit = process_cmd_cmdaccheck(&tx_message, line);
+  } else if (!strcmp(command, "cmdallow")) {
+    if (!strncmp(line, "all", 3)) {
+      do_normal_submit = process_cmd_cmdallowall(&tx_message, CPS_SplitWord(line));
+    } else {
+      do_normal_submit = process_cmd_cmdallow(&tx_message, line);
+    }
+  } else if (!strcmp(command, "cmddeny")) {
+    if (!strncmp(line, "all", 3)) {
+      line = CPS_SplitWord(line);
+      do_normal_submit = process_cmd_cmddenyall(&tx_message, line);
+    } else {
+      do_normal_submit = process_cmd_cmddeny(&tx_message, line);
+    }
+  } else if (!strcmp(command, "cyclelogs")) {
+    process_cmd_cyclelogs(&tx_message, line);
+  } else if (!strcmp(command, "delete")) {
+    do_normal_submit = process_cmd_delete(&tx_message, line);
+  } else if (!strcmp(command, "deny")) {
+    if (!strncmp(line, "all", 3)) {
+      do_normal_submit = process_cmd_denyall(&tx_message, CPS_SplitWord(line));
+    } else {
+      do_normal_submit = process_cmd_deny(&tx_message, line);
+    }
+  } else if (!strcmp(command, "dfreq")) {
+    process_cmd_dfreq(&tx_message, line);
+  } else if (!strcmp(command, "dns")) {
+    ret = process_cmd_dns(line);
     do_normal_submit = 0;
-    ret = process_cmd_sources(p+7);
-  } else if (!strncmp(p, "rekey", 5)) {
-    process_cmd_rekey(&tx_message, p+5);
-  } else if (!strncmp(p, "allow all", 9)) {
-    do_normal_submit = process_cmd_allowall(&tx_message, p+9);
-  } else if (!strncmp(p, "allow", 5)) {
-    do_normal_submit = process_cmd_allow(&tx_message, p+5);
-  } else if (!strncmp(p, "deny all", 8)) {
-    do_normal_submit = process_cmd_denyall(&tx_message, p+8);
-  } else if (!strncmp(p, "deny", 4)) {
-    do_normal_submit = process_cmd_deny(&tx_message, p+4);
-  } else if (!strncmp(p, "cmdallow all", 12)) {
-    do_normal_submit = process_cmd_cmdallowall(&tx_message, p+12);
-  } else if (!strncmp(p, "cmdallow", 8)) {
-    do_normal_submit = process_cmd_cmdallow(&tx_message, p+8);
-  } else if (!strncmp(p, "cmddeny all", 11)) {
-    do_normal_submit = process_cmd_cmddenyall(&tx_message, p+11);
-  } else if (!strncmp(p, "cmddeny", 7)) {
-    do_normal_submit = process_cmd_cmddeny(&tx_message, p+7);
-  } else if (!strncmp(p, "accheck", 7)) {
-    do_normal_submit = process_cmd_accheck(&tx_message, p+7);
-  } else if (!strncmp(p, "cmdaccheck", 10)) {
-    do_normal_submit = process_cmd_cmdaccheck(&tx_message, p+10);
-  } else if (!strncmp(p, "add server", 10)) {
-    do_normal_submit = process_cmd_add_server(&tx_message, p+10);
-  } else if (!strncmp(p, "add peer", 8)) {
-    do_normal_submit = process_cmd_add_peer(&tx_message, p+8);
-  } else if (!strncmp(p, "delete", 6)) {
-    do_normal_submit = process_cmd_delete(&tx_message, p+6);
-  } else if (!strncmp(p, "writertc", 7)) {
-    process_cmd_writertc(&tx_message, p+7);
-  } else if (!strncmp(p, "rtcdata", 7)) {
+  } else if (!strcmp(command, "doffset")) {
+    process_cmd_doffset(&tx_message, line);
+  } else if (!strcmp(command, "dump")) {
+    process_cmd_dump(&tx_message, line);
+  } else if (!strcmp(command, "exit")) {
     do_normal_submit = 0;
-    ret = process_cmd_rtcreport(p);
-  } else if (!strncmp(p, "trimrtc", 7)) {
-    process_cmd_trimrtc(&tx_message, p);
-  } else if (!strncmp(p, "cyclelogs", 9)) {
-    process_cmd_cyclelogs(&tx_message, p);
-  } else if (!strncmp(p, "dfreq", 5)) {
-    process_cmd_dfreq(&tx_message, p+5);
-  } else if (!strncmp(p, "doffset", 7)) {
-    process_cmd_doffset(&tx_message, p+7);
-  } else if (!strncmp(p, "tracking", 8)) {
-    ret = process_cmd_tracking(p+8);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "clients", 7)) {
-    ret = process_cmd_clients(p+7);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "makestep", 8)) {
-    process_cmd_makestep(&tx_message, p+8);
-  } else if (!strncmp(p, "activity", 8)) {
-    ret = process_cmd_activity(p+8);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "reselectdist", 12)) {
-    do_normal_submit = process_cmd_reselectdist(&tx_message, p+12);
-  } else if (!strncmp(p, "reselect", 8)) {
-    process_cmd_reselect(&tx_message, p+8);
-  } else if (!strncmp(p, "waitsync", 8)) {
-    ret = process_cmd_waitsync(p+8);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "dns ", 4)) {
-    ret = process_cmd_dns(p+4);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "timeout", 7)) {
-    ret = process_cmd_timeout(p+7);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "retries", 7)) {
-    ret = process_cmd_retries(p+7);
-    do_normal_submit = 0;
-  } else if (!strncmp(p, "help", 4)) {
+    *quit = 1;
+    ret = 1;
+  } else if (!strcmp(command, "help")) {
     do_normal_submit = 0;
     give_help();
     ret = 1;
-  } else if (!strncmp(p, "quit", 4)) {
+  } else if (!strcmp(command, "local")) {
+    do_normal_submit = process_cmd_local(&tx_message, line);
+  } else if (!strcmp(command, "makestep")) {
+    process_cmd_makestep(&tx_message, line);
+  } else if (!strcmp(command, "manual")) {
+    if (!strncmp(line, "list", 4)) {
+      do_normal_submit = 0;
+      ret = process_cmd_manual_list(CPS_SplitWord(line));
+    } else if (!strncmp(line, "delete", 6)) {
+      do_normal_submit = process_cmd_manual_delete(&tx_message, CPS_SplitWord(line));
+    } else {
+      do_normal_submit = process_cmd_manual(&tx_message, line);
+    }
+  } else if (!strcmp(command, "maxdelay")) {
+    do_normal_submit = process_cmd_maxdelay(&tx_message, line);
+  } else if (!strcmp(command, "maxdelaydevratio")) {
+    do_normal_submit = process_cmd_maxdelaydevratio(&tx_message, line);
+  } else if (!strcmp(command, "maxdelayratio")) {
+    do_normal_submit = process_cmd_maxdelayratio(&tx_message, line);
+  } else if (!strcmp(command, "maxpoll")) {
+    do_normal_submit = process_cmd_maxpoll(&tx_message, line);
+  } else if (!strcmp(command, "maxupdateskew")) {
+    do_normal_submit = process_cmd_maxupdateskew(&tx_message, line);
+  } else if (!strcmp(command, "minpoll")) {
+    do_normal_submit = process_cmd_minpoll(&tx_message, line);
+  } else if (!strcmp(command, "minstratum")) {
+    do_normal_submit = process_cmd_minstratum(&tx_message, line);
+  } else if (!strcmp(command, "offline")) {
+    do_normal_submit = process_cmd_offline(&tx_message, line);
+  } else if (!strcmp(command, "online")) {
+    do_normal_submit = process_cmd_online(&tx_message, line);
+  } else if (!strcmp(command, "password")) {
+    do_normal_submit = process_cmd_password(&tx_message, line);
+  } else if (!strcmp(command, "polltarget")) {
+    do_normal_submit = process_cmd_polltarget(&tx_message, line);
+  } else if (!strcmp(command, "quit")) {
     do_normal_submit = 0;
     *quit = 1;
     ret = 1;
-  } else if (!strncmp(p, "exit", 4)) {
+  } else if (!strcmp(command, "rekey")) {
+    process_cmd_rekey(&tx_message, line);
+  } else if (!strcmp(command, "reselect")) {
+    process_cmd_reselect(&tx_message, line);
+  } else if (!strcmp(command, "reselectdist")) {
+    do_normal_submit = process_cmd_reselectdist(&tx_message, line);
+  } else if (!strcmp(command, "retries")) {
+    ret = process_cmd_retries(line);
     do_normal_submit = 0;
-    *quit = 1;
-    ret = 1;
+  } else if (!strcmp(command, "rtcdata")) {
+    do_normal_submit = 0;
+    ret = process_cmd_rtcreport(line);
+  } else if (!strcmp(command, "settime")) {
+    do_normal_submit = 0;
+    ret = process_cmd_settime(line);
+  } else if (!strcmp(command, "sources")) {
+    do_normal_submit = 0;
+    ret = process_cmd_sources(line);
+  } else if (!strcmp(command, "sourcestats")) {
+    do_normal_submit = 0;
+    ret = process_cmd_sourcestats(line);
+  } else if (!strcmp(command, "timeout")) {
+    ret = process_cmd_timeout(line);
+    do_normal_submit = 0;
+  } else if (!strcmp(command, "tracking")) {
+    ret = process_cmd_tracking(line);
+    do_normal_submit = 0;
+  } else if (!strcmp(command, "trimrtc")) {
+    process_cmd_trimrtc(&tx_message, line);
+  } else if (!strcmp(command, "waitsync")) {
+    ret = process_cmd_waitsync(line);
+    do_normal_submit = 0;
+  } else if (!strcmp(command, "writertc")) {
+    process_cmd_writertc(&tx_message, line);
   } else {
     fprintf(stderr, "Unrecognized command\n");
     do_normal_submit = 0;
@@ -2664,6 +2539,77 @@ process_line(char *line, int *quit)
   }
   fflush(stderr);
   fflush(stdout);
+  return ret;
+}
+
+/* ================================================== */
+
+static int
+authenticate_from_config(const char *filename)
+{
+  CMD_Request tx_message;
+  CMD_Reply rx_message;
+  char line[2048], keyfile[2048], *command, *arg, *password;
+  const char *hashname;
+  unsigned long key_id = 0, key_id2 = -1;
+  int ret;
+  FILE *in;
+
+  in = fopen(filename, "r");
+  if (!in) {
+    fprintf(stderr, "Could not open file %s\n", filename);
+    return 0;
+  }
+
+  *keyfile = '\0';
+  while (fgets(line, sizeof (line), in)) {
+    CPS_NormalizeLine(line);
+    command = line;
+    arg = CPS_SplitWord(line);
+    if (!strcasecmp(command, "keyfile")) {
+      snprintf(keyfile, sizeof (keyfile), "%s", arg);
+    } else if (!strcasecmp(command, "commandkey")) {
+      if (sscanf(arg, "%lu", &key_id) != 1)
+        key_id = -1;
+    }
+  }
+  fclose(in);
+
+  if (!*keyfile || key_id == -1) {
+    fprintf(stderr, "Could not read keyfile or commandkey in file %s\n", filename);
+    return 0;
+  }
+
+  in = fopen(keyfile, "r");
+  if (!in) {
+    fprintf(stderr, "Could not open keyfile %s\n", filename);
+    return 0;
+  }
+
+  while (fgets(line, sizeof (line), in)) {
+    CPS_NormalizeLine(line);
+    if (!*line || !CPS_ParseKey(line, &key_id2, &hashname, &password))
+      continue;
+    if (key_id == key_id2)
+      break;
+  }
+  fclose(in);
+
+  if (key_id == key_id2) {
+    if (process_cmd_authhash(hashname) &&
+        process_cmd_password(&tx_message, password)) {
+      ret = request_reply(&tx_message, &rx_message, RPY_NULL, 1);
+    } else {
+      ret = 0;
+    }
+  } else {
+    fprintf(stderr, "Could not find key %lu in keyfile %s\n", key_id, keyfile);
+    ret = 0;
+  }
+
+  /* Erase password from stack */
+  memset(line, 0, sizeof (line));
+
   return ret;
 }
 
@@ -2695,7 +2641,7 @@ process_args(int argc, char **argv, int multi)
     }
 
     ret = process_line(line, &quit);
-    if (!ret)
+    if (!ret || quit)
       break;
   }
 
@@ -2710,7 +2656,7 @@ static void
 display_gpl(void)
 {
     printf("chrony version %s\n"
-           "Copyright (C) 1997-2003, 2007, 2009-2011 Richard P. Curnow and others\n"
+           "Copyright (C) 1997-2003, 2007, 2009-2013 Richard P. Curnow and others\n"
            "chrony comes with ABSOLUTELY NO WARRANTY.  This is free software, and\n"
            "you are welcome to redistribute it under certain conditions.  See the\n"
            "GNU General Public License version 2 for details.\n\n",
@@ -2725,7 +2671,8 @@ main(int argc, char **argv)
   char *line;
   const char *progname = argv[0];
   const char *hostname = "localhost";
-  int quit = 0, ret = 1, multi = 0;
+  const char *conf_file = DEFAULT_CONF_FILE;
+  int quit = 0, ret = 1, multi = 0, auto_auth = 0;
   int port = DEFAULT_CANDM_PORT;
 
   /* Parse command line options */
@@ -2740,6 +2687,13 @@ main(int argc, char **argv)
       if (*argv) {
         port = atoi(*argv);
       }
+    } else if (!strcmp(*argv, "-f")) {
+      ++argv, --argc;
+      if (*argv) {
+        conf_file = *argv;
+      }
+    } else if (!strcmp(*argv, "-a")) {
+      auto_auth = 1;
     } else if (!strcmp(*argv, "-m")) {
       multi = 1;
     } else if (!strcmp(*argv, "-n")) {
@@ -2754,7 +2708,7 @@ main(int argc, char **argv)
       printf("chronyc (chrony) version %s\n", CHRONY_VERSION);
       exit(0);
     } else if (!strncmp(*argv, "-", 1)) {
-      fprintf(stderr, "Usage : %s [-h <hostname>] [-p <port-number>] [-n] [-4|-6] [-m] [command]\n", progname);
+      fprintf(stderr, "Usage : %s [-h <hostname>] [-p <port-number>] [-n] [-4|-6] [-m] [-a] [-f <file>]] [command]\n", progname);
       exit(1);
     } else {
       break; /* And process remainder of line as a command */
@@ -2768,10 +2722,23 @@ main(int argc, char **argv)
   if (on_terminal && (argc == 0)) {
     display_gpl();
   }
+
+  /* MD5 is the default authentication hash */
+  auth_hash_id = HSH_GetHashId("MD5");
+  if (auth_hash_id < 0) {
+    fprintf(stderr, "Could not initialize MD5\n");
+    return 1;
+  }
   
   open_io(hostname, port);
 
-  if (argc > 0) {
+  if (auto_auth) {
+    ret = authenticate_from_config(conf_file);
+  }
+
+  if (!ret) {
+    ;
+  } else if (argc > 0) {
     ret = process_args(argc, argv, multi);
   } else {
     do {
@@ -2786,6 +2753,8 @@ main(int argc, char **argv)
   }
 
   close_io();
+
+  free(password);
 
   return !ret;
 }

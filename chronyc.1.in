@@ -1,4 +1,4 @@
-.TH CHRONYC 1 "July 2011" "chrony 1.26" "User's Manual"
+.TH CHRONYC 1 "August 2013" "chrony 1.29" "User's Manual"
 .SH NAME
 chronyc \- command-line interface for chronyd
 
@@ -12,7 +12,7 @@ clocks.
 
 \fBchronyc\fR is a command-line interface program which can be used to
 monitor \fIchronyd\fR's performance and to change various operating
-parateters whilst it is running.
+parameters whilst it is running.
 
 .SH USAGE
 A detailed description of all commands supported by \fBchronyc\fR is available
@@ -41,6 +41,16 @@ resolve hostnames only to IPv6 addresses
 \fB\-m\fR
 allow multiple commands to be specified on the command line.  Each argument
 will be interpreted as a whole command.
+.TP
+\fB\-f\fR \fIconf-file\fR
+This option can be used to specify an alternate location for the
+configuration file (default \fI@SYSCONFDIR@/chrony.conf\fR). The configuration file is
+needed for the \fB-a\fR option.
+.TP
+\fB\-a\fR
+With this option chronyc will try to authenticate automatically on
+start. It will read the configuration file, read the command key from the
+keyfile and run the authhash and password commands.
 .TP
 \fIcommand\fR
 specify command.  If no command is given, chronyc will read commands

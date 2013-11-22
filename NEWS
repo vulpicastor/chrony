@@ -1,3 +1,59 @@
+New in version 1.29
+===================
+
+Security fixes
+--------------
+* Fix crash when processing crafted commands (CVE-2012-4502)
+  (possible with IP addresses allowed by cmdallow and localhost)
+* Don't send uninitialized data in SUBNETS_ACCESSED and CLIENT_ACCESSES
+  replies (CVE-2012-4503) (not used by chronyc)
+
+Other changes
+-------------
+* Drop support for SUBNETS_ACCESSED and CLIENT_ACCESSES commands
+
+New in version 1.28
+===================
+
+* Combine sources to improve accuracy
+* Make config and command parser strict
+* Add -a option to chronyc to authenticate automatically
+* Add -R option to ignore initstepslew and makestep directives
+* Add generatecommandkey, minsamples, maxsamples and user directives
+* Improve compatibility with NTPv1 and NTPv2 clients
+* Create sockets only in selected family with -4/-6 option
+* Treat address bind errors as non-fatal
+* Extend tracking log
+* Accept float values as initstepslew threshold
+* Allow hostnames in offline, online and burst commands
+* Fix and improve peer polling
+* Fix crash in config parsing with too many servers
+* Fix crash with duplicated initstepslew address
+* Fix delta calculation with extreme frequency offsets
+* Set local stratum correctly
+* Remove unnecessary adjtimex calls
+* Set paths in documentation by configure
+* Update chrony.spec
+
+New in version 1.27
+===================
+
+* Support for stronger keys via NSS or libtomcrypt library
+* Support reading leap second data from tz database
+* Support for precise clock stepping on Linux
+* Support for nanoseconds in SHM refclock
+* Make offset corrections smoother on Linux
+* Make transmit timestamps random below clock precision
+* Add corrtimeratio and maxchange directives
+* Extend tracking, sources and activity reports
+* Wait in foreground process until daemon is fully initialized
+* Fix crash with slow name resolving
+* Fix iburst with jittery sources
+* Fix offset stored in rtc data right after trimrtc
+* Fix crash and hang with RTC or manual samples
+* Don't use readonly adjtime on Linux kernels before 2.6.28 
+* Changed chronyc protocol, incompatible with older versions
+
 New in version 1.26
 ===================
 

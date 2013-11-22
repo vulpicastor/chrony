@@ -30,8 +30,7 @@
 
 #include "config.h"
 
-#include <assert.h>
-#include <stddef.h>
+#include "sysincl.h"
 
 #include "conf.h"
 #include "local.h"
@@ -132,8 +131,6 @@ calculate_sys_precision(void)
     precision_log--;
     best_dusec *= 2;
   }
-
-  return;
 }
 
 /* ================================================== */
@@ -167,7 +164,6 @@ LCL_Initialise(void)
 void
 LCL_Finalise(void)
 {
-  return;
 }
 
 /* ================================================== */
@@ -220,14 +216,11 @@ LCL_AddParameterChangeHandler(LCL_ParameterChangeHandler handler, void *anything
   new_entry->prev = change_list.prev;
   change_list.prev->next = new_entry;
   change_list.prev = new_entry;
-
-  return;
 }
 
 /* ================================================== */
 
 /* Remove a handler */
-extern 
 void LCL_RemoveParameterChangeHandler(LCL_ParameterChangeHandler handler, void *anything)
 {
 
@@ -251,8 +244,6 @@ void LCL_RemoveParameterChangeHandler(LCL_ParameterChangeHandler handler, void *
   ptr->prev->next = ptr->next;
 
   free(ptr);
-
-  return;
 }
 
 /* ================================================== */
@@ -279,8 +270,6 @@ LCL_AddDispersionNotifyHandler(LCL_DispersionNotifyHandler handler, void *anythi
   new_entry->prev = dispersion_notify_list.prev;
   dispersion_notify_list.prev->next = new_entry;
   dispersion_notify_list.prev = new_entry;
-
-  return;
 }
 
 /* ================================================== */
@@ -310,8 +299,6 @@ void LCL_RemoveDispersionNotifyHandler(LCL_DispersionNotifyHandler handler, void
   ptr->prev->next = ptr->next;
 
   free(ptr);
-
-  return;
 }
 
 /* ================================================== */
@@ -443,7 +430,7 @@ LCL_AccumulateDeltaFrequency(double dfreq)
 /* ================================================== */
 
 void
-LCL_AccumulateOffset(double offset)
+LCL_AccumulateOffset(double offset, double corr_rate)
 {
   ChangeListEntry *ptr;
   struct timeval raw, cooked;
@@ -454,7 +441,7 @@ LCL_AccumulateOffset(double offset)
   LCL_ReadRawTime(&raw);
   LCL_CookTime(&raw, &cooked, NULL);
 
-  (*drv_accrue_offset)(offset);
+  (*drv_accrue_offset)(offset, corr_rate);
 
   /* Dispatch to all handlers */
   for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
@@ -505,7 +492,7 @@ LCL_NotifyExternalTimeStep(struct timeval *raw, struct timeval *cooked,
 /* ================================================== */
 
 void
-LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset)
+LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset, double corr_rate)
 {
   ChangeListEntry *ptr;
   struct timeval raw, cooked;
@@ -532,7 +519,7 @@ LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset)
   current_freq_ppm = (*drv_set_freq)(current_freq_ppm);
   dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 + old_freq_ppm);
 
-  (*drv_accrue_offset)(doffset);
+  (*drv_accrue_offset)(doffset, corr_rate);
 
   /* Dispatch to all handlers */
   for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
@@ -577,8 +564,6 @@ lcl_RegisterSystemDrivers(lcl_ReadFrequencyDriver read_freq,
 #ifdef TRACEON
   LOG(LOGS_INFO, LOGF_Local, "Local freq=%.3fppm", current_freq_ppm);
 #endif
-
-  return;
 }
 
 /* ================================================== */
@@ -598,7 +583,7 @@ LCL_MakeStep(double threshold)
     return 0;
 
   /* Cancel remaining slew and make the step */
-  LCL_AccumulateOffset(correction);
+  LCL_AccumulateOffset(correction, 0.0);
   LCL_ApplyStepOffset(-correction);
 
   LOG(LOGS_WARN, LOGF_Local, "System clock was stepped by %.3f seconds", correction);
@@ -614,8 +599,6 @@ LCL_SetLeap(int leap)
   if (drv_set_leap) {
     (drv_set_leap)(leap);
   }
-
-  return;
 }
 
 /* ================================================== */

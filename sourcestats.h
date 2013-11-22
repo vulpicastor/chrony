@@ -82,10 +82,10 @@ extern void SST_GetFrequencyRange(SST_Stats inst, double *lo, double *hi);
 extern void
 SST_GetSelectionData(SST_Stats inst, struct timeval *now,
                      int *stratum,
-                     double *best_offset, double *best_root_delay,
-                     double *best_root_dispersion,
-                     double *variance,
-                     int *select_ok);
+                     double *offset_lo_limit,
+                     double *offset_hi_limit,
+                     double *root_distance,
+                     double *variance, int *select_ok);
 
 /* Get data needed when setting up tracking on this source */
 extern void
@@ -93,15 +93,6 @@ SST_GetTrackingData(SST_Stats inst, struct timeval *ref_time,
                     double *average_offset, double *offset_sd,
                     double *frequency, double *skew,
                     double *root_delay, double *root_dispersion);
-
-/* Get parameters for using this source as the reference */
-extern void
-SST_GetReferenceData(SST_Stats inst, struct timeval *now, 
-                     int *stratum, double *offset,
-                     double *root_delay, double *root_dispersion,
-                     double *frequency, double *skew);
-
-
 
 /* This routine is called when the local machine clock parameters are
    changed.  It adjusts all existing samples that we are holding for
