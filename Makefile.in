@@ -79,10 +79,11 @@ distclean : clean
 	-rm -f Makefile
 
 clean :
-	-rm -f *.o *.s chronyc chronyd core getdate.c *~
+	-rm -f *.o *.s chronyc chronyd core *~
 	-rm -rf .deps
 
-getdate.c :
+getdate.c : ;
+getdate :
 	bison -o getdate.c getdate.y
 
 # For install, don't use the install command, because its switches
