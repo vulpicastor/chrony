@@ -1,94 +1,29 @@
 #!/usr/bin/make -f
-# Made with the aid of dh_make, by Craig Small
-# Sample debian/rules that uses debhelper. GNU copyright 1997 by Joey Hess.
-# Some lines taken from debmake, by Cristoph Lameter.
+# -*- makefile -*-
 
-# Uncomment this to turn on verbose mode.
-# export DH_VERBOSE=1
+BASE=debian/chrony
 
-CFLAGS = -Wall -g
-ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
-       CFLAGS += -O0
-else
-        CFLAGS += -O2
-endif
+%:
+	dh $@ --parallel
 
-DPKG_EXPORT_BUILDFLAGS = 1
-include /usr/share/dpkg/buildflags.mk
+override_dh_auto_configure:
+	dh_auto_configure --  --mandir=/usr/share/man \
+	    --sysconfdir=/etc/chrony  --without-readline
 
-build: build-stamp
-build-arch: build-stamp
-build-indep:
+override_dh_auto_build:
+	dh_auto_build
+	make docs
 
-build-stamp:
-	dh_testdir
+override_dh_installchangelogs:
+	dh_installchangelogs NEWS
 
-	./configure --prefix='usr' --sysconfdir=/etc/chrony --without-readline
-	# Add here commands to compile the package.
-	$(MAKE) 
-	$(MAKE) docs
+override_dh_install:
+	dh_install
+	install -m 0755 -T debian/apm   $(BASE)/etc/apm/event.d/01chrony
+	install -m 0755 -T debian/ip-up  $(BASE)/etc/ppp/ip-up.d/chrony
+	install -m 0755 -T debian/ip-down $(BASE)/etc/ppp/ip-down.d/chrony
 
-	touch build-stamp
+override_dh_installinit:
+	# set boot sequence number for old sysv-rc style
+	dh_installinit --update-rcd-params="defaults 83"
 
-clean:
-	dh_testdir
-	dh_testroot
-	rm -f build-stamp install-stamp debian/substvars
-
-	# Add here commands to clean up after the build process.
-	[ ! -f Makefile ] || $(MAKE) distclean
-	rm -f faq.html chrony.html chrony.info
-	dh_clean
-
-install: install-stamp
-install-stamp: build-stamp
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_installdirs
-
-	# Add here commands to install the package into debian/chrony.
-	$(MAKE) install DESTDIR=`pwd`/debian/chrony/ MANDIR=usr/share/man
-
-	touch install-stamp
-
-# Build architecture-independent files here.
-binary-indep: build install
-
-# Build architecture-dependent files here.
-binary-arch: build install
-	chmod 755 faqgen.pl
-	./faqgen.pl < faq.txt > faq.html
-	dh_testdir
-	dh_testroot
-	dh_installdocs
-#	dh_installexamples
-	dh_installmenu -n
-	dh_installinit -n
-	dh_installcron
-	dh_installman chrony.1 chronyc.1 chronyd.8
-	dh_installchangelogs 
-	cp debian/chrony.conf debian/chrony/usr/share/chrony
-	cp debian/chrony.conf.md5sum debian/chrony/usr/share/chrony
-#	cp chrony.keys debian/chrony/etc/chrony
-	cp chrony.info debian/chrony/usr/share/info
-	cp debian/ip-up debian/chrony/etc/ppp/ip-up.d/chrony
-	cp debian/ip-down debian/chrony/etc/ppp/ip-down.d/chrony
-	cp debian/apm debian/chrony/etc/apm/event.d/01chrony
-	chmod 755 debian/chrony/etc/apm/event.d/01chrony
-	dh_strip
-	dh_compress
-	dh_fixperms
-#	chmod 640 debian/chrony/etc/chrony/chrony.keys
-	chmod 755 debian/chrony/etc/ppp/ip-up.d/chrony debian/chrony/etc/ppp/ip-down.d/chrony
-	dh_installdeb
-	dh_shlibdeps
-	dh_gencontrol
-	dh_md5sums
-	dh_builddeb
-
-source diff:                                                                  
-	@echo >&2 'source and diff are obsolete - use dpkg-source -b'; false
-
-binary: binary-indep binary-arch
-.PHONY: build clean binary-indep binary-arch binary

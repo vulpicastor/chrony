@@ -16,6 +16,9 @@ chrony (1.29-1) unstable; urgency=medium
     - 03_recreate-always-getdate-c
     - 04_do-not-look-for-ncurses    (Closes: #646732)
     - 05_disable-installation-of-license
+  * debian/rules:
+    - Move to dh-based rules file.
+    - Enable parallel builds.
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 22 Nov 2013 23:05:44 +0100
 
