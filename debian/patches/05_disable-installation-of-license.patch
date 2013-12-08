@@ -1,0 +1,24 @@
+Package:     chrony
+Subject:     disable installation of license
+Author:      Joachim Wiedorn <ad_debian at joonet.de>
+Forwarded:   no
+Last-Update: 2013-11-22
+
+For Debian the file COPYING is not needed. The right
+license does exist at the system.
+---
+
+diff -urN s04/Makefile.in s05/Makefile.in
+--- s04/Makefile.in	2013-11-22 22:23:51.692184662 +0100
++++ s05/Makefile.in	2013-11-22 23:00:54.991695779 +0100
+@@ -110,8 +110,8 @@
+ 	chmod 755 $(DESTDIR)$(BINDIR)/chronyc
+ 	cp chrony.txt $(DESTDIR)$(DOCDIR)/chrony.txt
+ 	chmod 644 $(DESTDIR)$(DOCDIR)/chrony.txt
+-	cp COPYING $(DESTDIR)$(DOCDIR)/COPYING
+-	chmod 644 $(DESTDIR)$(DOCDIR)/COPYING
++#	cp COPYING $(DESTDIR)$(DOCDIR)/COPYING
++#	chmod 644 $(DESTDIR)$(DOCDIR)/COPYING
+ 	cp README $(DESTDIR)$(DOCDIR)/README
+ 	chmod 644 $(DESTDIR)$(DOCDIR)/README
+ 	cp chrony.1 $(DESTDIR)$(MANDIR)/man1

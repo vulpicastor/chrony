@@ -9,6 +9,13 @@ chrony (1.29-1) unstable; urgency=medium
     - Set myself as new maintainer. Closes: #705768
     - Bump to Standards-Version 3.9.5.
     - Move to debhelper >= 9 and compat level 9.
+  * Move to source format 3.0 (quilt).
+  * Add the following patch files:  (Closes: #637514)
+    - 01_fix-small-typo-in-manpages
+    - 02_add-version-header-file
+    - 03_recreate-always-getdate-c
+    - 04_do-not-look-for-ncurses    (Closes: #646732)
+    - 05_disable-installation-of-license
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 22 Nov 2013 23:05:44 +0100
 

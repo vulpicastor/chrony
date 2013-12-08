@@ -1,0 +1,30 @@
+Package:     chrony
+Subject:     do not look for ncurses
+Author:      Sven Joachim <svenjoac at gmx.de>
+Bug-Debian:  http://bugs.debian.org/646732
+Forwarded:   no
+Last-Update: 2013-11-22
+
+Patch the configure script to not look for ncurses, because 
+it is useless (upstream build system erroneously believes 
+that ncurses is necessary for linking with readline).
+---
+
+diff -urNa s03/configure s04/configure
+--- s03/configure	2013-08-08 15:58:07.000000000 +0200
++++ s04/configure	2013-11-22 22:39:10.988986429 +0100
+@@ -487,12 +487,12 @@
+ 
+   if [ "x$READLINE_LINK" = "x" ] && [ $try_readline = "1" ]; then
+     if test_code readline 'stdio.h readline/readline.h readline/history.h' \
+-      "$readline_inc" "$readline_lib $ncurses_lib -lreadline" \
++      "$readline_inc" "$readline_lib -lreadline" \
+       'add_history(readline("prompt"));'
+     then
+       add_def FEAT_READLINE
+       READLINE_COMPILE="$readline_inc"
+-      READLINE_LINK="$readline_lib $ncurses_lib -lreadline"
++      READLINE_LINK="$readline_lib -lreadline"
+     fi
+   fi
+ 

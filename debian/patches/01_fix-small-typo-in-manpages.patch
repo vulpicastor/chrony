@@ -1,0 +1,19 @@
+Package:     chrony
+Subject:     fix small typo in manpage
+Author:      Joachim Wiedorn <ad_debian at joonet.de>
+Forwarded:   no
+Last-Update: 2013-11-22
+---
+
+diff -urNa s00/chronyd.8.in s01/chronyd.8.in
+--- s00/chronyd.8.in	2013-08-08 16:35:32.000000000 +0200
++++ s01/chronyd.8.in	2013-11-22 22:07:42.129110068 +0100
+@@ -72,7 +72,7 @@
+ .B \-R
+ When this option is used, the \fIinitstepslew\fR directive and the
+ \fImakestep\fR directive used with a positive limit will be ignored. This
+-option is useful when restarting \fBchronyd\fR and can be used in conjuction
++option is useful when restarting \fBchronyd\fR and can be used in conjunction
+ with the \fB-r\fR option.
+ .TP
+ .B \-s
