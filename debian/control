@@ -1,14 +1,17 @@
 Source: chrony
 Section: admin
 Priority: extra
-Maintainer: Debian QA Group <packages@qa.debian.org>
-Standards-Version: 3.9.2
-Build-Depends: debhelper (>= 8), libedit-dev, texinfo, bison, dpkg-dev (>= 1.16.1~)
+Maintainer: Joachim Wiedorn <ad_debian@joonet.de>
+Standards-Version: 3.9.5
+Build-Depends: debhelper (>= 9),
+ libedit-dev, texinfo, bison,
+ libnss3-dev, dpkg-dev (>= 1.16.1~)
 Homepage: http://chrony.tuxfamily.org
 
 Package: chrony
 Architecture: linux-any
-Depends: ${misc:Depends}, ${shlibs:Depends}, ucf, timelimit, dpkg (>=1.15.4) | install-info, net-tools
+Depends: ${misc:Depends}, ${shlibs:Depends},
+ ucf, timelimit, install-info, net-tools
 Recommends: udev (>= 0.124-1)
 Conflicts: ntp, ntp-simple, ntp-refclock, time-daemon
 Provides: time-daemon

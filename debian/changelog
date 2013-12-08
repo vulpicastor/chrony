@@ -1,3 +1,17 @@
+chrony (1.29-1) unstable; urgency=medium
+
+  * New upstream release with some bugfixes:
+    - Closes: #719132: new upstream version, fixes security bugs.
+    - Closes: #719203: Fixing vulnerabilities:
+        CVE-2012-4502 - Buffer overflow,
+        CVE-2012-4503 - Uninitialized data.
+  * debian/control:
+    - Set myself as new maintainer. Closes: #705768
+    - Bump to Standards-Version 3.9.5.
+    - Move to debhelper >= 9 and compat level 9.
+
+ -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 22 Nov 2013 23:05:44 +0100
+
 chrony (1.26-4) unstable; urgency=low
 
   * QA upload.
