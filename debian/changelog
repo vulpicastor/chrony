@@ -19,8 +19,10 @@ chrony (1.29-1) unstable; urgency=medium
   * debian/rules:
     - Move to dh-based rules file.
     - Enable parallel builds.
+  * Add debian/watch file.
+  * Full update of debian/copyright file.
 
- -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 22 Nov 2013 23:05:44 +0100
+ -- Joachim Wiedorn <ad_debian@joonet.de>  Sun, 08 Dec 2013 01:15:49 +0100
 
 chrony (1.26-4) unstable; urgency=low
 
