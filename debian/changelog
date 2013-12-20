@@ -22,6 +22,7 @@ chrony (1.29-1) unstable; urgency=medium
   * Add debian/watch file.
   * Full update of debian/copyright file.
   * Add debian/doc-base file.
+  * Full update of debian/README.Debian file.
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 20 Dec 2013 23:35:25 +0100
 
