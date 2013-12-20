@@ -5,6 +5,7 @@ chrony (1.29-1) unstable; urgency=medium
     - Closes: #719203: Fixing vulnerabilities:
         CVE-2012-4502 - Buffer overflow,
         CVE-2012-4503 - Uninitialized data.
+
   * debian/control:
     - Set myself as new maintainer. Closes: #705768
     - Bump to Standards-Version 3.9.5.
@@ -19,10 +20,14 @@ chrony (1.29-1) unstable; urgency=medium
   * debian/rules:
     - Move to dh-based rules file.
     - Enable parallel builds.
+
   * Add debian/watch file.
   * Full update of debian/copyright file.
   * Add debian/doc-base file.
   * Full update of debian/README.Debian file.
+  * Update debian/postinst, debian/postrm, debian/prerm. 
+  * Remove obsolete debian/preinst. Reduce mailing within postinst.
+  * Do not use old md5sum file anymore for ucf in postinst script.
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 20 Dec 2013 23:35:25 +0100
 
