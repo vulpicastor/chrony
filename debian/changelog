@@ -21,8 +21,9 @@ chrony (1.29-1) unstable; urgency=medium
     - Enable parallel builds.
   * Add debian/watch file.
   * Full update of debian/copyright file.
+  * Add debian/doc-base file.
 
- -- Joachim Wiedorn <ad_debian@joonet.de>  Sun, 08 Dec 2013 01:15:49 +0100
+ -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 20 Dec 2013 23:35:25 +0100
 
 chrony (1.26-4) unstable; urgency=low
 
