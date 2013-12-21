@@ -4,8 +4,11 @@ Priority: extra
 Maintainer: Joachim Wiedorn <ad_debian@joonet.de>
 Standards-Version: 3.9.5
 Build-Depends: debhelper (>= 9),
- libedit-dev, texinfo, bison,
- libnss3-dev, dpkg-dev (>= 1.16.1~)
+ texinfo, bison,
+ libedit-dev,
+ libnss3-dev,
+ libtomcrypt-dev,
+ dpkg-dev (>= 1.16.1~)
 Homepage: http://chrony.tuxfamily.org
 Vcs-Git: git://anonscm.debian.org/collab-maint/chrony.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/chrony.git
