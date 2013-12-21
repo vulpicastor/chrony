@@ -16,7 +16,6 @@ chrony (1.29-1) unstable; urgency=medium
   * Move to source format 3.0 (quilt).
   * Add the following patch files:  (Closes: #637514)
     - 01_fix-small-typo-in-manpages
-    - 02_add-version-header-file
     - 03_recreate-always-getdate-c
     - 04_do-not-look-for-ncurses    (Closes: #646732)
     - 05_disable-installation-of-license
