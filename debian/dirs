@@ -1,11 +1,7 @@
-usr/bin
-usr/sbin
-usr/share/info
 usr/share/chrony
 etc/chrony
 etc/ppp/ip-up.d
 etc/ppp/ip-down.d
-etc/cron.weekly
 etc/apm/event.d
 var/log/chrony
 var/lib/chrony

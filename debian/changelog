@@ -32,6 +32,8 @@ chrony (1.29-1) unstable; urgency=medium
   * Remove obsolete debian/preinst. Reduce mailing within postinst.
   * Do not use old md5sum file anymore for ucf in postinst script.
   * Add status action in init script (debian/init). Closes: #652207
+  * Add debian/install file for installing example of chrony.conf.
+  * Reduce debian/dirs file for use with debhelper 9.
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 20 Dec 2013 23:35:25 +0100
 
