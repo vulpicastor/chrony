@@ -25,6 +25,8 @@ DESC="time daemon"
 
 test -f $DAEMON || exit 0
 
+. /lib/lsb/init-functions
+
 putonline ()
 { # Do we have a default route?  If so put chronyd online.
     if timelimit -q -s9 -t5 -- netstat -rn 2>/dev/null | grep -q '0\.0\.0\.0' 
@@ -89,8 +91,11 @@ case "$1" in
 			;;
 	esac
 	;;
+    status)
+	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+	;;
     *)
-	echo "Usage: /etc/init.d/chrony {start|stop|restart|force-reload}"
+	echo "Usage: /etc/init.d/chrony {start|stop|restart|force-reload|status}"
 	exit 1
 	;;
 esac

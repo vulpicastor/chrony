@@ -12,6 +12,7 @@ chrony (1.29-1) unstable; urgency=medium
     - Move to debhelper >= 9 and compat level 9.
     - Update package descriptions.
     - Add Vcs fields to new git repository.
+    - Add dependency to lsb-base (for init script).
   * Move to source format 3.0 (quilt).
   * Add the following patch files:  (Closes: #637514)
     - 01_fix-small-typo-in-manpages
@@ -30,6 +31,7 @@ chrony (1.29-1) unstable; urgency=medium
   * Update debian/postinst, debian/postrm, debian/prerm. 
   * Remove obsolete debian/preinst. Reduce mailing within postinst.
   * Do not use old md5sum file anymore for ucf in postinst script.
+  * Add status action in init script (debian/init). Closes: #652207
 
  -- Joachim Wiedorn <ad_debian@joonet.de>  Fri, 20 Dec 2013 23:35:25 +0100
 

@@ -12,8 +12,12 @@ Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/chrony.git
 
 Package: chrony
 Architecture: linux-any
-Depends: ${misc:Depends}, ${shlibs:Depends},
- ucf, timelimit, install-info, net-tools
+Depends: ${misc:Depends},
+ ${shlibs:Depends},
+ ucf, timelimit,
+ install-info,
+ net-tools,
+ lsb-base
 Recommends: udev (>= 0.124-1)
 Conflicts: time-daemon, ntp
 Provides: time-daemon
