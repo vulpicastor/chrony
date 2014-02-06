@@ -1,3 +1,13 @@
+chrony (1.29.1-1) unstable; urgency=high
+
+  * New upstream release with bugfix:
+    - Closes: #737644: Fixing vulnerability:
+        CVE-2014-0021 - traffic amplification in cmdmon protocol
+        (incompatible with previous protocol version, but chronyc
+        supports both).
+
+ -- Joachim Wiedorn <ad_debian@joonet.de>  Thu, 06 Feb 2014 15:51:47 +0100
+
 chrony (1.29-1) unstable; urgency=medium
 
   * New upstream release with some bugfixes:
