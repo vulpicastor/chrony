@@ -1,4 +1,4 @@
-.TH CHRONYC 1 "August 2013" "chrony 1.29" "User's Manual"
+.TH CHRONYC 1 "January 2014" "chrony 1.29.1" "User's Manual"
 .SH NAME
 chronyc \- command-line interface for chronyd
 

@@ -1,4 +1,4 @@
-.TH CHRONYD 8 "August 2013" "chrony 1.29" "System Administration"
+.TH CHRONYD 8 "January 2014" "chrony 1.29.1" "System Administration"
 .SH NAME
 chronyd \- chrony background daemon
 
