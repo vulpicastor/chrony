@@ -67,16 +67,22 @@ extern void LCL_GetOffsetCorrection(struct timeval *raw, double *correction, dou
    doffset : delta offset applied (positive => make local system fast
    by that amount, negative => make it slow by that amount)
 
-   is_step_change : true if change is being applied as a jump (using
-   settimeofday rather than adjtime)
+   change_type : what type of change is being applied
    
    anything : Passthrough argument from call to registration routine */
 
 
+typedef enum {
+  LCL_ChangeAdjust,
+  LCL_ChangeStep,
+  LCL_ChangeUnknownStep
+} LCL_ChangeType;
+
 typedef void (*LCL_ParameterChangeHandler)
      (struct timeval *raw, struct timeval *cooked,
       double dfreq,
-      double doffset, int is_step_change,
+      double doffset,
+      LCL_ChangeType change_type,
       void *anything
       );
 
@@ -183,7 +189,7 @@ extern void LCL_Finalise(void);
 /* Routine to convert the outstanding system clock error to a step and
    apply it, e.g. if the system clock has ended up an hour wrong due
    to a timezone problem. */
-extern int LCL_MakeStep(double threshold);
+extern int LCL_MakeStep(void);
 
 /* Routine to schedule a leap second. Leap second will be inserted
    at the end of the day if argument is positive, deleted if negative,

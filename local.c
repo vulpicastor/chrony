@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011, 2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -126,11 +126,15 @@ calculate_sys_precision(void)
   assert(best_dusec > 0);
 
   precision_quantum = best_dusec * 1.0e-6;
+
+  /* Get rounded log2 value of the measured precision */
   precision_log = 0;
-  while (best_dusec < 500000) {
+  while (best_dusec < 707107) {
     precision_log--;
     best_dusec *= 2;
   }
+
+  DEBUG_LOG(LOGF_Local, "Clock precision %.9f (%d)", precision_quantum, precision_log);
 }
 
 /* ================================================== */
@@ -244,6 +248,20 @@ void LCL_RemoveParameterChangeHandler(LCL_ParameterChangeHandler handler, void *
   ptr->prev->next = ptr->next;
 
   free(ptr);
+}
+
+/* ================================================== */
+
+static void
+invoke_parameter_change_handlers(struct timeval *raw, struct timeval *cooked,
+                                 double dfreq, double doffset,
+                                 LCL_ChangeType change_type)
+{
+  ChangeListEntry *ptr;
+
+  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
+    (ptr->handler)(raw, cooked, dfreq, doffset, change_type, ptr->anything);
+  }
 }
 
 /* ================================================== */
@@ -369,7 +387,6 @@ LCL_ReadAbsoluteFrequency(void)
 void
 LCL_SetAbsoluteFrequency(double afreq_ppm)
 {
-  ChangeListEntry *ptr;
   struct timeval raw, cooked;
   double dfreq;
   
@@ -382,15 +399,13 @@ LCL_SetAbsoluteFrequency(double afreq_ppm)
   
   afreq_ppm = (*drv_set_freq)(afreq_ppm);
 
-  dfreq = (afreq_ppm - current_freq_ppm) / (1.0e6 + current_freq_ppm);
+  dfreq = (afreq_ppm - current_freq_ppm) / (1.0e6 - current_freq_ppm);
 
   LCL_ReadRawTime(&raw);
   LCL_CookTime(&raw, &cooked, NULL);
 
   /* Dispatch to all handlers */
-  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
-    (ptr->handler)(&raw, &cooked, dfreq, 0.0, 0, ptr->anything);
-  }
+  invoke_parameter_change_handlers(&raw, &cooked, dfreq, 0.0, LCL_ChangeAdjust);
 
   current_freq_ppm = afreq_ppm;
 
@@ -401,7 +416,6 @@ LCL_SetAbsoluteFrequency(double afreq_ppm)
 void
 LCL_AccumulateDeltaFrequency(double dfreq)
 {
-  ChangeListEntry *ptr;
   struct timeval raw, cooked;
   double old_freq_ppm;
 
@@ -411,20 +425,17 @@ LCL_AccumulateDeltaFrequency(double dfreq)
    are handled in units of ppm, whereas the 'dfreq' argument is in
    terms of the gradient of the (offset) v (local time) function. */
 
-  current_freq_ppm = (1.0 + dfreq) * current_freq_ppm + 1.0e6 * dfreq;
+  current_freq_ppm += dfreq * (1.0e6 - current_freq_ppm);
 
   /* Call the system-specific driver for setting the frequency */
   current_freq_ppm = (*drv_set_freq)(current_freq_ppm);
-  dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 + old_freq_ppm);
+  dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 - old_freq_ppm);
 
   LCL_ReadRawTime(&raw);
   LCL_CookTime(&raw, &cooked, NULL);
 
   /* Dispatch to all handlers */
-  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
-    (ptr->handler)(&raw, &cooked, dfreq, 0.0, 0, ptr->anything);
-  }
-
+  invoke_parameter_change_handlers(&raw, &cooked, dfreq, 0.0, LCL_ChangeAdjust);
 }
 
 /* ================================================== */
@@ -432,7 +443,6 @@ LCL_AccumulateDeltaFrequency(double dfreq)
 void
 LCL_AccumulateOffset(double offset, double corr_rate)
 {
-  ChangeListEntry *ptr;
   struct timeval raw, cooked;
 
   /* In this case, the cooked time to be passed to the notify clients
@@ -444,10 +454,7 @@ LCL_AccumulateOffset(double offset, double corr_rate)
   (*drv_accrue_offset)(offset, corr_rate);
 
   /* Dispatch to all handlers */
-  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
-    (ptr->handler)(&raw, &cooked, 0.0, offset, 0, ptr->anything);
-  }
-
+  invoke_parameter_change_handlers(&raw, &cooked, 0.0, offset, LCL_ChangeAdjust);
 }
 
 /* ================================================== */
@@ -455,7 +462,6 @@ LCL_AccumulateOffset(double offset, double corr_rate)
 void
 LCL_ApplyStepOffset(double offset)
 {
-  ChangeListEntry *ptr;
   struct timeval raw, cooked;
 
   /* In this case, the cooked time to be passed to the notify clients
@@ -467,10 +473,7 @@ LCL_ApplyStepOffset(double offset)
   (*drv_apply_step_offset)(offset);
 
   /* Dispatch to all handlers */
-  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
-    (ptr->handler)(&raw, &cooked, 0.0, offset, 1, ptr->anything);
-  }
-
+  invoke_parameter_change_handlers(&raw, &cooked, 0.0, offset, LCL_ChangeStep);
 }
 
 /* ================================================== */
@@ -479,12 +482,8 @@ void
 LCL_NotifyExternalTimeStep(struct timeval *raw, struct timeval *cooked,
     double offset, double dispersion)
 {
-  ChangeListEntry *ptr;
-
   /* Dispatch to all handlers */
-  for (ptr = change_list.next; ptr != &change_list; ptr = ptr->next) {
-    (ptr->handler)(raw, cooked, 0.0, offset, 1, ptr->anything);
-  }
+  invoke_parameter_change_handlers(raw, cooked, 0.0, offset, LCL_ChangeUnknownStep);
 
   lcl_InvokeDispersionNotifyHandlers(dispersion);
 }
@@ -508,16 +507,14 @@ LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset, double corr_rate)
   /* Work out new absolute frequency.  Note that absolute frequencies
    are handled in units of ppm, whereas the 'dfreq' argument is in
    terms of the gradient of the (offset) v (local time) function. */
-  current_freq_ppm = (1.0 + dfreq) * old_freq_ppm + 1.0e6 * dfreq;
+  current_freq_ppm += dfreq * (1.0e6 - current_freq_ppm);
 
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_Local, "old_freq=%.3fppm new_freq=%.3fppm offset=%.6fsec",
+  DEBUG_LOG(LOGF_Local, "old_freq=%.3fppm new_freq=%.3fppm offset=%.6fsec",
       old_freq_ppm, current_freq_ppm, doffset);
-#endif
 
   /* Call the system-specific driver for setting the frequency */
   current_freq_ppm = (*drv_set_freq)(current_freq_ppm);
-  dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 + old_freq_ppm);
+  dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 - old_freq_ppm);
 
   (*drv_accrue_offset)(doffset, corr_rate);
 
@@ -561,17 +558,15 @@ lcl_RegisterSystemDrivers(lcl_ReadFrequencyDriver read_freq,
 
   current_freq_ppm = (*drv_read_freq)();
 
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_Local, "Local freq=%.3fppm", current_freq_ppm);
-#endif
+  DEBUG_LOG(LOGF_Local, "Local freq=%.3fppm", current_freq_ppm);
 }
 
 /* ================================================== */
 /* Look at the current difference between the system time and the NTP
-   time, and make a step to cancel it if it's larger than the threshold. */
+   time, and make a step to cancel it. */
 
 int
-LCL_MakeStep(double threshold)
+LCL_MakeStep(void)
 {
   struct timeval raw;
   double correction;
@@ -579,14 +574,11 @@ LCL_MakeStep(double threshold)
   LCL_ReadRawTime(&raw);
   LCL_GetOffsetCorrection(&raw, &correction, NULL);
 
-  if (fabs(correction) <= threshold)
-    return 0;
-
   /* Cancel remaining slew and make the step */
   LCL_AccumulateOffset(correction, 0.0);
   LCL_ApplyStepOffset(-correction);
 
-  LOG(LOGS_WARN, LOGF_Local, "System clock was stepped by %.3f seconds", correction);
+  LOG(LOGS_WARN, LOGF_Local, "System clock was stepped by %.6f seconds", correction);
 
   return 1;
 }

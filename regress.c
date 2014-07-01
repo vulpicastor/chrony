@@ -209,8 +209,6 @@ n_runs_from_residuals(double *resid, int n)
 /* Return a boolean indicating whether we had enough points for
    regression */
 
-#define MIN_SAMPLES_FOR_REGRESS 3
-
 int
 RGR_FindBestRegression 
 (double *x,                     /* independent variable */
@@ -255,7 +253,7 @@ RGR_FindBestRegression
   int start, resid_start, nruns, npoints;
   int i;
 
-  assert(n <= MAX_POINTS);
+  assert(n <= MAX_POINTS && m >= 0);
   assert(n * REGRESS_RUNS_RATIO < sizeof (critical_runs) / sizeof (critical_runs[0]));
 
   if (n < MIN_SAMPLES_FOR_REGRESS) {
@@ -392,7 +390,7 @@ find_ordered_entry_with_flags(double *x, int n, int index, int *flags)
       l = u + 1;
       r = v;
       do {
-        while (x[l] < piv && l < v) l++;
+        while (l < v && x[l] < piv) l++;
         while (x[r] > piv) r--;
         if (r <= l) break;
         EXCH(x[l], x[r]);
@@ -571,11 +569,6 @@ RGR_FindBestRobustRegression
 
     b = X / V;
     a = my - b*mx;
-
-
-#if 0
-    printf("my=%20.12f mx=%20.12f a=%20.12f b=%20.12f\n", my, mx, a, b);
-#endif
 
     s2 = 0.0;
     for (i=start; i<n; i++) {

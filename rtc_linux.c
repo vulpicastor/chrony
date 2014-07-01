@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2012
+ * Copyright (C) Miroslav Lichvar  2012-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -38,6 +38,7 @@
 #include "local.h"
 #include "util.h"
 #include "sys_linux.h"
+#include "reference.h"
 #include "regress.h"
 #include "rtc.h"
 #include "rtc_linux.h"
@@ -67,9 +68,7 @@ static int fd = -1;
 
 #define LOWEST_MEASUREMENT_PERIOD 15
 #define HIGHEST_MEASUREMENT_PERIOD 480
-
-/* Try to avoid doing regression after _every_ sample we accumulate */
-#define N_SAMPLES_PER_REGRESSION 4
+#define N_SAMPLES_PER_REGRESSION 1
 
 static int measurement_period = LOWEST_MEASUREMENT_PERIOD;
 
@@ -124,6 +123,9 @@ static double coef_gain_rate;
    nearest second, so that we can write a useful set of coefs to the
    RTC data file once we have reacquired its offset after the step */
 static double saved_coef_gain_rate;
+
+/* Threshold for automatic RTC trimming in seconds, zero when disabled */
+static double autotrim_threshold;
 
 /* Filename supplied by config file where RTC coefficients are
    stored. */
@@ -263,12 +265,18 @@ static void
 slew_samples
 (struct timeval *raw, struct timeval *cooked,
  double dfreq,
- double doffset, int is_step_change,
+ double doffset,
+ LCL_ChangeType change_type,
  void *anything)
 {
   int i;
   double delta_time;
   double old_seconds_fast, old_gain_rate;
+
+  if (change_type == LCL_ChangeUnknownStep) {
+    /* Drop all samples. */
+    n_samples = 0;
+  }
 
   for (i=0; i<n_samples; i++) {
     UTI_AdjustTimeval(system_times + i, cooked, system_times + i, &delta_time,
@@ -280,18 +288,13 @@ slew_samples
 
   if (coefs_valid) {
     coef_seconds_fast += doffset;
-    coef_gain_rate = (1.0 + dfreq) * (1.0 + coef_gain_rate) - 1.0;
+    coef_gain_rate += dfreq * (1.0 - coef_gain_rate);
   }
 
-#if 0
-  LOG(LOGS_INFO, LOGF_RtcLinux, "dfreq=%.8f doffset=%.6f old_fast=%.6f old_rate=%.3f new_fast=%.6f new_rate=%.3f",
+  DEBUG_LOG(LOGF_RtcLinux, "dfreq=%.8f doffset=%.6f old_fast=%.6f old_rate=%.3f new_fast=%.6f new_rate=%.3f",
       dfreq, doffset,
       old_seconds_fast, 1.0e6 * old_gain_rate,
       coef_seconds_fast, 1.0e6 * coef_gain_rate);
-#else
-  (void)old_seconds_fast; (void)old_gain_rate;
-#endif
-
 }
 
 /* ================================================== */
@@ -370,13 +373,54 @@ t_from_rtc(struct tm *stm) {
 /* ================================================== */
 
 static void
+read_hwclock_file(const char *hwclock_file)
+{
+  FILE *in;
+  char line[256];
+  int i;
+
+  if (!hwclock_file)
+    return;
+
+  in = fopen(hwclock_file, "r");
+  if (!in) {
+    LOG(LOGS_WARN, LOGF_RtcLinux, "Could not open hwclockfile %s",
+        hwclock_file);
+    return;
+  }
+
+  /* Read third line from the file. */
+  for (i = 0; i < 3; i++) {
+    if (!fgets(line, sizeof(line), in))
+      break;
+  }
+
+  fclose(in);
+
+  if (i == 3 && !strncmp(line, "LOCAL", 5)) {
+    rtc_on_utc = 0;
+  } else if (i == 3 && !strncmp(line, "UTC", 3)) {
+    rtc_on_utc = 1;
+  } else {
+    LOG(LOGS_WARN, LOGF_RtcLinux, "Could not read LOCAL/UTC setting from hwclockfile %s",
+        hwclock_file);
+  }
+}
+
+/* ================================================== */
+
+static void
 setup_config(void)
 {
-  if (CNF_GetRTCOnUTC()) {
+  if (CNF_GetRtcOnUtc()) {
     rtc_on_utc = 1;
   } else {
     rtc_on_utc = 0;
   }
+
+  read_hwclock_file(CNF_GetHwclockFile());
+
+  autotrim_threshold = CNF_GetRtcAutotrim();
 }
 
 /* ================================================== */
@@ -429,6 +473,7 @@ write_coefs_to_file(int valid,time_t ref_time,double offset,double rate)
   struct stat buf;
   char *temp_coefs_file_name;
   FILE *out;
+  int r1, r2;
 
   /* Create a temporary file with a '.tmp' extension. */
 
@@ -450,9 +495,10 @@ write_coefs_to_file(int valid,time_t ref_time,double offset,double rate)
   }
 
   /* Gain rate is written out in ppm */
-  if ((fprintf(out, "%1d %ld %.6f %.3f\n",
-          valid,ref_time, offset, 1.0e6 * rate) < 0) |
-      fclose(out)) {
+  r1 = fprintf(out, "%1d %ld %.6f %.3f\n",
+               valid, ref_time, offset, 1.0e6 * rate);
+  r2 = fclose(out);
+  if (r1 < 0 || r2) {
     Free(temp_coefs_file_name);
     LOG(LOGS_WARN, LOGF_RtcLinux, "Could not write to temporary RTC file %s.tmp",
         coefs_file_name);
@@ -462,10 +508,12 @@ write_coefs_to_file(int valid,time_t ref_time,double offset,double rate)
   /* Clone the file attributes from the existing file if there is one. */
 
   if (!stat(coefs_file_name,&buf)) {
-    if (chown(temp_coefs_file_name,buf.st_uid,buf.st_gid)) {
-      LOG(LOGS_WARN, LOGF_RtcLinux, "Could not change ownership of temporary RTC file %s.tmp", coefs_file_name);
+    if (chown(temp_coefs_file_name,buf.st_uid,buf.st_gid) ||
+        chmod(temp_coefs_file_name,buf.st_mode & 0777)) {
+      LOG(LOGS_WARN, LOGF_RtcLinux,
+          "Could not change ownership or permissions of temporary RTC file %s.tmp",
+          coefs_file_name);
     }
-    chmod(temp_coefs_file_name,buf.st_mode&0777);
   }
 
   /* Rename the temporary file to the correct location (see rename(2) for details). */
@@ -670,6 +718,7 @@ handle_relock_after_trim(void)
   time_t ref;
   double fast, slope;
 
+  valid = 0;
   run_regression(1, &valid, &ref, &fast, &slope);
 
   if (valid) {
@@ -687,8 +736,25 @@ handle_relock_after_trim(void)
 
 /* ================================================== */
 
-/* Day number of 1 Jan 1970 */
-#define MJD_1970 40587
+static void
+maybe_autotrim(void)
+{
+  /* Trim only when in normal mode, the coefficients are fresh, the current
+     offset is above the threshold and the system clock is synchronized */
+
+  if (operating_mode != OM_NORMAL || !coefs_valid || n_samples_since_regression)
+    return;
+  
+  if (autotrim_threshold <= 0.0 || fabs(coef_seconds_fast) < autotrim_threshold)
+    return;
+
+  if (REF_GetOurStratum() >= 16)
+    return;
+
+  RTC_Linux_Trim();
+}
+
+/* ================================================== */
 
 static void
 process_reading(time_t rtc_time, struct timeval *system_time)
@@ -700,9 +766,10 @@ process_reading(time_t rtc_time, struct timeval *system_time)
   switch (operating_mode) {
     case OM_NORMAL:
 
-      if (n_samples_since_regression >= /* 4 */ 1 ) {
+      if (n_samples_since_regression >= N_SAMPLES_PER_REGRESSION) {
         run_regression(1, &coefs_valid, &coef_ref_time, &coef_seconds_fast, &coef_gain_rate);
         n_samples_since_regression = 0;
+        maybe_autotrim();
       }
       
       break;
@@ -753,7 +820,6 @@ read_from_device(void *any)
     /* This looks like a bad error : the file descriptor was indicating it was
      * ready to read but we couldn't read anything.  Give up. */
     LOG(LOGS_ERR, LOGF_RtcLinux, "Could not read flags %s : %s", CNF_GetRtcDevice(), strerror(errno));
-    error = 1;
     SCH_RemoveInputFileHandler(fd);
     switch_interrupts(0); /* Likely to raise error too, but just to be sure... */
     close(fd);
@@ -905,7 +971,7 @@ RTC_Linux_WriteParameters(void)
 
 /* ================================================== */
 /* Try to set the system clock from the RTC, in the same manner as
-   /sbin/clock -s -u would do.  We're not as picky about OS version
+   /sbin/hwclock -s would do.  We're not as picky about OS version
    etc in this case, since we have fewer requirements regarding the
    RTC behaviour than we do for the rest of the module. */
 
@@ -913,7 +979,7 @@ void
 RTC_Linux_TimePreInit(void)
 {
   int fd, status;
-  struct rtc_time rtc_raw;
+  struct rtc_time rtc_raw, rtc_raw_retry;
   struct tm rtc_tm;
   time_t rtc_t, estimated_correct_rtc_t;
   long interval;
@@ -931,7 +997,15 @@ RTC_Linux_TimePreInit(void)
     return; /* Can't open it, and won't be able to later */
   }
 
-  status = ioctl(fd, RTC_RD_TIME, &rtc_raw);
+  /* Retry reading the rtc until both read attempts give the same sec value.
+     This way the race condition is prevented that the RTC has updated itself
+     during the first read operation. */
+  do {
+    status = ioctl(fd, RTC_RD_TIME, &rtc_raw);
+    if (status >= 0) {
+      status = ioctl(fd, RTC_RD_TIME, &rtc_raw_retry);
+    }
+  } while (status >= 0 && rtc_raw.tm_sec != rtc_raw_retry.tm_sec);
 
   if (status >= 0) {
     /* Convert to seconds since 1970 */

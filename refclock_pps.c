@@ -134,9 +134,7 @@ static int pps_poll(RCL_Instance instance)
   ts.tv_nsec = 0;
 
   if (time_pps_fetch(pps->handle, PPS_TSFMT_TSPEC, &pps_info, &ts) < 0) {
-#if 0
-    LOG(LOGS_INFO, LOGF_Refclock, "time_pps_fetch error");
-#endif
+    LOG(LOGS_ERR, LOGF_Refclock, "time_pps_fetch() failed : %s", strerror(errno));
     return 0;
   }
 
@@ -149,6 +147,8 @@ static int pps_poll(RCL_Instance instance)
   }
 
   if (seq == pps->last_seq || (ts.tv_sec == 0 && ts.tv_nsec == 0)) { 
+    DEBUG_LOG(LOGF_Refclock, "PPS sample ignored seq=%lu ts=%lu.%09lu",
+        seq, ts.tv_sec, ts.tv_nsec);
     return 0;
   }
 

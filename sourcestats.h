@@ -43,6 +43,9 @@ extern SST_Stats SST_CreateInstance(uint32_t refid, IPAddr *addr);
 /* This function deletes an instance of the statistics handler. */
 extern void SST_DeleteInstance(SST_Stats inst);
 
+/* This function resets an instance */
+extern void SST_ResetInstance(SST_Stats inst);
+
 /* This function accumulates a single sample into the statistics handler
 
    sample_time is the epoch at which the sample is to be considered to
@@ -66,11 +69,6 @@ extern void SST_AccumulateSample(SST_Stats inst, struct timeval *sample_time, do
    confidence interval for the frequency, and truncates the register
    down to that number of samples. */
 extern void SST_DoNewRegression(SST_Stats inst);
-
-/* This function does a simple regression on what is in the register,
-   without trying to optimise the error bounds on the frequency by
-   deleting old samples */
-extern void SST_DoUpdateRegression(SST_Stats inst);
 
 /* Return the assumed worst case range of values that this source's
    frequency lies within.  Frequency is defined as the amount of time

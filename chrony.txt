@@ -234,20 +234,6 @@ have some expertise in these areas, you might be able to fill the gaps.
 
   3. More drivers for reference clock support
 
-  4. Automation of the trimrtc and writertc mechanisms
-
-     Currently, the RTC trimming mechanism is a manual operation,
-     because there has to be a reasonable guarantee that the system will
-     stay up for a reasonable length of time afterwards.  (If it is shut
-     down too soon, a poor characterisation of the RTC drift rate will
-     be stored on disc, giving a bad system clock error when the system
-     is next booted.)
-
-     To make chrony more automated for the non-expert user, it would be
-     useful if this problem could be avoided so that trimrtc could be
-     done automatically (e.g.  in a crontab, or as part of the ip-up or
-     ip-down scripts.)
-
 2 Installation
 **************
 
@@ -266,9 +252,9 @@ directory tree where the software should be installed.  For example,
 
      ./configure --prefix=/opt/free
 
-   will install the 'chronyd' daemon into /opt/free/sbin and the chronyc
-control program into /opt/free/bin.  The default value for the prefix is
-/usr/local.
+   will install the 'chronyd' daemon into /opt/free/sbin and the
+'chronyc' control program into /opt/free/bin.  The default value for the
+prefix is /usr/local.
 
    The configure script assumes you want to use gcc as your compiler.
 If you want to use a different compiler, you can configure this way:
@@ -291,11 +277,11 @@ with line editing support.  If you don't want this, specify the
 -disable-readline flag to configure.  Please refer to *note line editing
 support:: for more information.
 
-   If a 'timepps.h' header is available, chronyd will be built with PPS
-API reference clock driver.  If the header is installed in a location
-that isn't normally searched by the compiler, you can add it to the
-searched locations by setting 'CPPFLAGS' variable to
-'-I/path/to/timepps'.
+   If a 'timepps.h' header is available (e.g.  from the LinuxPPS project
+(http://linuxpps.org/)), 'chronyd' will be built with PPS API reference
+clock driver.  If the header is installed in a location that isn't
+normally searched by the compiler, you can add it to the searched
+locations by setting 'CPPFLAGS' variable to '-I/path/to/timepps'.
 
    Now type
 
@@ -334,9 +320,17 @@ location of the file called 'dir'.  This will typically be
      install-info /usr/local/share/info/chrony.info /usr/share/info/dir
 
    Now that the software is successfully installed, the next step is to
-set up a configuration file.  The contents of this depend on the network
-environment in which the computer operates.  Typical scenarios are
-described in the following section of the document.
+set up a configuration file.  The default location of the file is
+'/etc/chrony.conf'.  Suppose you want to use public NTP servers from the
+pool.ntp.org project as your time reference.  A minimal useful
+configuration file could be
+
+     server 0.pool.ntp.org iburst
+     server 1.pool.ntp.org iburst
+     server 2.pool.ntp.org iburst
+     makestep 10 3
+
+   Then, 'chronyd' can be run.
 
 2.1 Support for line editing libraries
 ======================================
@@ -414,9 +408,9 @@ will install the files to the intended final locations.
 =======================================
 
 In this section we discuss how to configure chrony for computers that
-have permanent connections to the internet (or to any network containing
-true NTP servers which ultimately derive their time from a reference
-clock).
+are connected to the Internet (or to any network containing true NTP
+servers which ultimately derive their time from a reference clock)
+permanently or most of the time.
 
    To operate in this mode, you will need to know the names of the NTP
 server machines you wish to use.  You may be able to find names of
@@ -447,16 +441,16 @@ minimum
      server g.h.i
 
    However, you will probably want to include some of the other
-directives described later.  The following directives will be
-particularly useful : 'driftfile', 'commandkey', 'keyfile'.  The
-smallest useful configuration file would look something like
+directives described later.  The 'driftfile' and 'makestep' directives
+may be particularly useful.  Also, the 'iburst' server option is useful
+to speed up the initial synchronization.  The smallest useful
+configuration file would look something like
 
-     server a.b.c
-     server d.e.f
-     server g.h.i
-     keyfile /etc/chrony.keys
-     commandkey 1
+     server a.b.c iburst
+     server d.e.f iburst
+     server g.h.i iburst
      driftfile /var/lib/chrony/drift
+     makestep 10 3
 
 3.2 Infrequent connection to true NTP servers
 =============================================
@@ -499,17 +493,11 @@ state, and that they should not be contacted until 'chronyd' receives
 notification that the link to the internet is present.
 
    In order to notify 'chronyd' of the presence of the link, you will
-need to be able to log in to it with the program chronyc.  To do this,
-'chronyd' needs to be configured with an administrator password.  To set
-up an administrator password, you can create a file '/etc/chrony.keys'
-containing a single line
-
-     1 ALongAndRandomPassword
-
-   and add the following line to '/etc/chrony.conf' (the order of the
-lines does not matter)
-
-     commandkey 1
+need to be able to log in to it with the program 'chronyc'.  To do this,
+'chronyd' needs to be configured with an administrator password.  The
+password is read from a file specified by the 'keyfile' directive.  The
+'generatecommandkey' directive can be used to generate a random password
+automatically on the first 'chronyd' start.
 
    The smallest useful configuration file would look something like
 
@@ -517,8 +505,9 @@ lines does not matter)
      server d.e.f offline
      server g.h.i offline
      keyfile /etc/chrony.keys
-     commandkey 1
+     generatecommandkey
      driftfile /var/lib/chrony/drift
+     makestep 10 3
 
    The next section describes how to tell 'chronyd' when the internet
 link goes up and down.
@@ -576,7 +565,7 @@ be (assuming the clients are in the 192.168.165.x subnet and that the
 master's address is 192.168.169.170)
 
      driftfile /var/lib/chrony/drift
-     commandkey 25
+     generatecommandkey
      keyfile /etc/chrony.keys
      initstepslew 10 client1 client3 client6
      local stratum 8
@@ -591,7 +580,7 @@ restarts, the configuration file might be
      logdir /var/log/chrony
      log measurements statistics tracking
      keyfile /etc/chrony.keys
-     commandkey 24
+     generatecommandkey
      local stratum 10
      initstepslew 20 master
      allow 192.168.169.170
@@ -713,7 +702,8 @@ example.
      log statistics measurements tracking
      driftfile /var/lib/chrony/drift
      keyfile /etc/chrony.keys
-     commandkey 25
+     generatecommandkey
+     makestep 10 3
      maxupdateskew 100.0
      dumponexit
      dumpdir /var/lib/chrony
@@ -785,6 +775,10 @@ the command
 
    Information messages and warnings will be logged to syslog.
 
+   If no configuration commands are specified on the command line,
+'chronyd' will read the commands from the configuration file (default
+'/etc/chrony.conf').
+
    The command line options supported are as follows:
 
 '-n'
@@ -793,21 +787,22 @@ the command
 '-d'
      When run in this mode, the program will not detach itself from the
      terminal, and all messages will be sent to the terminal instead of
-     to syslog.
+     to syslog.  When 'chronyd' was compiled with debugging support,
+     this option can be used twice to print also debugging messages.
 '-f <conf-file>'
      This option can be used to specify an alternate location for the
      configuration file (default '/etc/chrony.conf').
 '-r'
      This option will reload sample histories for each of the servers
-     being used.  These histories are created by using the 'dump'
-     command in 'chronyc', or by setting the 'dumponexit' directive in
-     the configuration file.  This option is useful if you want to stop
-     and restart 'chronyd' briefly for any reason, e.g.  to install a
-     new version.  However, it only makes sense on systems where the
-     kernel can maintain clock compensation whilst not under 'chronyd's'
-     control.  The only version where this happens so far is Linux.  On
-     systems where this is not the case, e.g.  Solaris and SunOS the
-     option should not be used.
+     and refclocks being used.  These histories are created by using the
+     'dump' command in 'chronyc', or by setting the 'dumponexit'
+     directive in the configuration file.  This option is useful if you
+     want to stop and restart 'chronyd' briefly for any reason, e.g.  to
+     install a new version.  However, it only makes sense on systems
+     where the kernel can maintain clock compensation whilst not under
+     'chronyd's' control.  The only version where this happens so far is
+     Linux.  On systems where this is not the case, e.g.  Solaris and
+     SunOS the option should not be used.
 '-R'
      When this option is used, the 'initstepslew' directive and the
      'makestep' directive used with a positive limit will be ignored.
@@ -817,7 +812,7 @@ the command
 '-s'
      This option will set the system clock from the computer's real-time
      clock.  This is analogous to supplying the '-s' flag to the
-     '/sbin/clock' program during the Linux boot sequence.
+     '/sbin/hwclock' program during the Linux boot sequence.
 
      Support for real-time clocks is limited at present - the criteria
      are described in the section on the 'rtcfile' directive (*note
@@ -836,9 +831,15 @@ the command
      able to determine accurate statistics for the difference between
      the real time clock and system clock last time the computer was on.
 '-u <user>'
-     When this option is used, chronyd will drop root privileges to the
-     specified user.  So far, it works only on Linux when compiled with
-     capabilities support.
+     This option sets the name of the user to which will 'chronyd'
+     switch to drop root privileges if compiled with Linux capabilities
+     support (default 'root').
+'-q'
+     When run in this mode, 'chronyd' will set the system clock once and
+     exit.  It will not detach from the terminal.
+'-Q'
+     This option is similar to '-q', but it will only print the offset
+     and not correct the clock.
 '-v'
      This option displays 'chronyd's' version number to the terminal and
      exits.
@@ -906,6 +907,10 @@ specified with a command line option.
 The following sections describe each of the commands in turn.  The
 directives can occur in any order in the file.
 
+   The configuration commands can also be specified directly on the
+'chronyd' command line, each argument is parsed as a line and the
+configuration file is ignored.
+
 4.2.1 Comments in the configuration file
 ----------------------------------------
 
@@ -921,22 +926,23 @@ following characters:
 4.2.2 acquisitionport
 ---------------------
 
-'chronyd' uses a separate client-side port for the rapid-fire
-measurements requested with the 'initstepslew' directive (*note
-initstepslew directive::).  Normally, that port is chosen arbitrarily by
-the operating system.  However, you can use 'acquisitionport' to
-explicitly specify a port.  This may be useful for getting through
-firewalls.
+By default, 'chronyd' uses a separate client socket for each configured
+server and their source port is chosen arbitrarily by the operating
+system.  However, you can use the 'acquisitionport' directive to
+explicitly specify a port and use only one socket (per IPv4/IPv6 address
+family) for all configured servers.  This may be useful for getting
+through firewalls.
 
-   Do not make acquisition and regular NTP service (*note port
-directive::) use the same port.
+   It may be set to the same port as used by the NTP server (*note port
+directive::) to use only one socket for all NTP packets.
 
    An example of the 'acquisitionport' command is
 
      acquisitionport 1123
 
-   This would change the port used for rapid queries to udp/1123.  You
-could then persuade the firewall administrator to let that port through.
+   This would change the source port used for client requests to
+udp/1123.  You could then persuade the firewall administrator to let
+that port through.
 
 4.2.3 allow
 -----------
@@ -1004,28 +1010,37 @@ directive::) is used in the configuration file, each of the computers
 listed in that directive must allow client access by this computer for
 it to work.
 
-4.2.4 bindaddress
+4.2.4 bindacqaddress
+--------------------
+
+The 'bindacqaddress' directive sets the network interface to which will
+'chronyd' bind its NTP client sockets.  The syntax is similar to the
+'bindaddress' and 'bindcmdaddress' directives.
+
+   For each of IPv4 and IPv6 protocols, only one 'bindacqaddress'
+directive can be specified.
+
+4.2.5 bindaddress
 -----------------
 
-The bindaddress allows you to restrict the network interface to which
-chronyd will listen for NTP packets.  This provides an additional level
-of access restriction above that available through the 'deny' mechanism.
+The 'bindaddress' directive allows you to restrict the network interface
+to which 'chronyd' will listen for NTP requests.  This provides an
+additional level of access restriction above that available through the
+'deny' mechanism.
 
    Suppose you have a local ethernet with addresses in the 192.168.1.0
-subnet together with a dial-up connection.  The ethernet interface's IP
-address is 192.168.1.1.  Suppose (for some reason) you want to block all
-access through the dialup connection (note, this will even block replies
-from servers on the dialup side, so you will not be able to synchronise
-to an external source).  You could add the line
+subnet together with an internet connection.  The ethernet interface's
+IP address is 192.168.1.1.  Suppose you want to block all access through
+the internet connection.  You could add the line
 
      bindaddress 192.168.1.1
 
    to the configuration file.
 
-   This directive affects NTP (UDP port 123) packets.  If no
+   This directive affects NTP (UDP port 123 by default) packets.  If no
 'bindcmdaddress' directive is present, the address supplied by
 'bindaddress' will be used to control binding of the command socket (UDP
-port 323) as well.
+port 323 by default) as well.
 
    The 'bindaddress' directive has been found to cause problems when
 used on computers that need to pass NTP traffic over multiple network
@@ -1036,31 +1051,33 @@ network firewall is more likely to be successful.
    For each of IPv4 and IPv6 protocols, only one 'bindaddress' directive
 can be specified.
 
-4.2.5 bindcmdaddress
+4.2.6 bindcmdaddress
 --------------------
 
-The bindcmdaddress allows you to restrict the network interface to which
-chronyd will listen for command packets (issued by chronyc).
+The 'bindcmdaddress' directive allows you to restrict the network
+interface to which 'chronyd' will listen for command packets (issued by
+'chronyc').  This provides an additional level of access restriction
+above that available through 'cmddeny' mechanism.
 
-   Suppose you have a local ethernet with addresses in the 192.168.1.0
-subnet together with a dial-up connection.  The ethernet interface's IP
-address is 192.168.1.1.  Suppose you want to block all access through
-the dialup connection.  You could add the line
+   Suppose you want to block all access except from localhost.  You
+could add the lines
 
-     bindcmdaddress 192.168.1.1
+     bindcmdaddress 127.0.0.1
+     bindcmdaddress ::1
 
    to the configuration file.
-
-   The 'bindcmdaddress' directive has been found to cause problems when
-used on computers that need to pass command traffic over multiple
-network interfaces.  It is, therefore, not particularly useful.  Use of
-the 'cmdallow' and 'cmddeny' directives together with a network firewall
-is more likely to be successful.
 
    For each of IPv4 and IPv6 protocols, only one 'bindcmdaddress'
 directive can be specified.
 
-4.2.6 broadcast
+   The default values are set by the 'bindaddress' directive.
+
+   The 'bindcmdaddress' directive has been found to cause problems when
+used on computers that need to pass command traffic over multiple
+network interfaces.  Use of the 'cmdallow' and 'cmddeny' directives
+together with a network firewall is more likely to be successful.
+
+4.2.7 broadcast
 ---------------
 
 The 'broadcast' directive is used to declare a broadcast address to
@@ -1096,7 +1113,20 @@ point-to-point client/server NTP access to measure the round-trip delay.
 Thus, the broadcast subnet should also be the subject of an 'allow'
 directive (*note allow directive::).
 
-4.2.7 cmdallow
+4.2.8 clientloglimit
+--------------------
+
+This directive specifies the maximum size of the memory allocated to log
+client accesses.  When the limit is reached, only information for
+clients that have already been logged will be updated.  If 0 is
+specified, the memory size will be unlimited.  The default is 524288
+bytes.
+
+   An example of the use of this directive is
+
+     clientloglimit 1048576
+
+4.2.9 cmdallow
 --------------
 
 This is similar to the 'allow' directive (*note allow directive::),
@@ -1111,8 +1141,8 @@ computer.)
 the 'allow all' directive (but applying to control access in this case,
 of course).
 
-4.2.8 cmddeny
--------------
+4.2.10 cmddeny
+--------------
 
 This is similar to the 'cmdallow' directive (*note cmdallow
 directive::), except that it denies control access to a particular
@@ -1123,8 +1153,24 @@ subnet or host, rather than allowing it.
    There is also a 'cmddeny all' directive with similar behaviour to the
 'cmdallow all' directive.
 
-4.2.9 combinelimit
-------------------
+4.2.11 cmdport
+--------------
+
+The 'cmdport' directive allows the port that is used for run-time
+command and monitoring (via the program 'chronyc') to be altered from
+its default (323/udp).  If set to 0, 'chronyd' will not open the port,
+this is useful to disable the 'chronyc' access completely.
+
+   An example shows the syntax
+
+     cmdport 257
+
+   This would make 'chronyd' use 257/udp as its command port.
+('chronyc' would need to be run with the '-p 257' switch to
+inter-operate correctly).
+
+4.2.12 combinelimit
+-------------------
 
 When 'chronyd' has multiple sources available for synchronization, it
 has to select one source as the synchronization source.  The measured
@@ -1146,7 +1192,7 @@ will be used to control the system clock.
 
      combinelimit <limit>
 
-4.2.10 commandkey
+4.2.13 commandkey
 -----------------
 
 The commandkey command is used to set the key number used for
@@ -1168,56 +1214,43 @@ the form
    When running the chronyc program to perform run-time configuration,
 the command
 
-     password foobar
+     password HEX:B028F91EA5C38D06C2E140B26C7F41EC
 
    must be entered before any commands affecting the operation of the
 daemon can be entered, or chronyc must be started with the '-a' option
 to run the password command automatically.
 
-4.2.11 cmdport
---------------
-
-The 'cmdport' directive allows the port that is used for run-time
-command and monitoring (via the program 'chronyc') to be altered from
-its default (323/udp).
-
-   An example shows the syntax
-
-     cmdport 257
-
-   This would make 'chronyd' use 257/udp as its command port.
-('chronyc' would need to be run with the '-p 257' switch to
-inter-operate correctly).
-
-4.2.12 corrtimeratio
+4.2.14 corrtimeratio
 --------------------
 
 When 'chronyd' makes a time correction, it controls how quickly the
-system clock is slewed (so far only on Linux).  This rate temporarily
-affects the frequency error of the system clock.
+system clock is slewed (so far only on Linux).  This rate affects the
+frequency error of the system clock.
 
-   The 'corrtimeratio' directive controls the ratio between the duration
-in which the clock is slewed for an average correction according to the
+   The 'corrtimeratio' directive sets the ratio between the duration in
+which the clock is slewed for an average correction according to the
 source history and the interval in which the corrections are done
 (usually the NTP polling interval).  Corrections larger than the average
 take less time and smaller corrections take more time, the amount of the
 correction and the correction time are inversely proportional.
 
-   Increasing 'corrtimeratio' makes the overall frequency error of the
-system clock smaller, but increases the overall time error as the
-corrections will take longer.
+   Increasing 'corrtimeratio' improves the overall frequency error of
+the system clock, but increases the overall time error as the
+corrections take longer.
 
-   By default, the ratio is 1, which means the duration of an average
-correction will be close to the update interval.
+   By default, the ratio is set to 3, the time accuracy of the clock is
+preferred over its frequency accuracy.
 
    The syntax is
 
-     corrtimeratio 10
+     corrtimeratio 100
 
-   The current remaining correction is shown in the 'tracking' report
-(*note tracking command::) as the 'System time' value.
+   The maximum allowed slew rate can be set by the 'maxslewrate'
+directive (*note maxslewrate directive::.  The current remaining
+correction is shown in the 'tracking' report (*note tracking command::)
+as the 'System time' value.
 
-4.2.13 deny
+4.2.15 deny
 -----------
 
 This is similar to the 'allow' directive (*note allow directive::),
@@ -1229,7 +1262,7 @@ rather than allowing it.
    There is also a 'deny all' directive with similar behaviour to the
 'allow all' directive.
 
-4.2.14 driftfile
+4.2.16 driftfile
 ----------------
 
 One of the main activities of the 'chronyd' program is to work out the
@@ -1257,7 +1290,7 @@ rate actually lies.
 
      driftfile /var/lib/chrony/drift
 
-4.2.15 dumpdir
+4.2.17 dumpdir
 --------------
 
 To compute the rate of gain or loss of time, 'chronyd' has to store a
@@ -1284,14 +1317,14 @@ directory where the measurement histories are saved.
 1.2.3.4 would have its measurement history saved in the file
 '/var/lib/chrony/1.2.3.4.dat'.
 
-4.2.16 dumponexit
+4.2.18 dumponexit
 -----------------
 
 If this command is present, it indicates that 'chronyd' should save the
 measurement history for each of its time sources recorded whenever the
 program exits.  (See the dumpdir command above).
 
-4.2.17 fallbackdrift
+4.2.19 fallbackdrift
 --------------------
 
 Fallback drifts are long-term averages of the system clock drift
@@ -1317,7 +1350,7 @@ and weekly temperature fluctuations.
 fallbacks will be used and the clock frequency will stay at the last
 value calculated before synchronisation was lost.
 
-4.2.18 generatecommandkey
+4.2.20 generatecommandkey
 -------------------------
 
 With this directive, if the command key is not found on start in the
@@ -1327,7 +1360,19 @@ command key from the /dev/urandom file and write it to the key file.
    The generated key will use SHA1 if 'chronyd' is compiled with the
 support, otherwise MD5 will be used.
 
-4.2.19 include
+4.2.21 hwclockfile
+------------------
+
+The 'hwclockfile' directive sets the location of the adjtime file which
+is used by the '/sbin/hwclock' program.  With this directive, 'chronyd'
+will parse the file to find out if the RTC keeps local time or UTC. It
+overrides the 'rtconutc' directive (*note rtconutc directive::).
+
+   An example of the command is
+
+     hwclockfile /etc/adjtime
+
+4.2.22 include
 --------------
 
 The 'include' directive includes a specified configuration file.  This
@@ -1336,16 +1381,16 @@ differences in a separate file.
 
      include /etc/chrony/local.conf
 
-4.2.20 initstepslew
+4.2.23 initstepslew
 -------------------
 
-In normal operation, 'chronyd' always slews the time when it needs to
-adjust the system clock.  For example, to correct a system clock which
-is 1 second slow, 'chronyd' slightly increases the amount by which the
-system clock is advanced on each clock interrupt, until the error is
-removed.  (Actually, this is done by calling the 'adjtime()' or similar
-system function which does it for us.)  Note that at no time does time
-run backwards with this method.
+In normal operation, 'chronyd' slews the time when it needs to adjust
+the system clock.  For example, to correct a system clock which is 1
+second slow, 'chronyd' slightly increases the amount by which the system
+clock is advanced on each clock interrupt, until the error is removed.
+(Actually, this is done by calling the 'adjtime()' or similar system
+function which does it for us.)  Note that at no time does time run
+backwards with this method.
 
    On most Unix systems it is not desirable to step the system clock,
 because many programs rely on time advancing monotonically forwards.
@@ -1371,8 +1416,7 @@ servers as arguments.  A maximum of 8 will be used.  Each of the servers
 is rapidly polled several times, and a majority voting mechanism used to
 find the most likely range of system clock error that is present.  A
 step (or slew) is applied to the system clock to correct this error.
-'chronyd' then enters its normal operating mode (where only slews are
-used).
+'chronyd' then enters its normal operating mode.
 
    An example of use of the command is
 
@@ -1392,7 +1436,15 @@ references some or all of the slaves.  Then, if the master machine has
 to be rebooted, the slaves can be relied on to 'flywheel' the time for
 the master.
 
-4.2.21 keyfile
+   The 'initstepslew' directive is functionally similar to a combination
+of the 'makestep' and 'server' directives with the 'iburst' option.  The
+main difference is that the 'initstepslew' servers are used only before
+normal operation begins and that the foreground 'chronyd' process waits
+for 'initstepslew' to finish before exiting.  This is useful to prevent
+programs started in the boot sequence after 'chronyd' from reading the
+clock before it's stepped.
+
+4.2.24 keyfile
 --------------
 
 This command is used to specify the location of the file containing
@@ -1416,14 +1468,17 @@ pairs.  The format of the file is shown below
 
    Each line consists of an ID, a name of authentication hash function
 (optional) and a password.  The ID can be any unsigned integer in the
-range 0 through 2**32-1.  The hash function is MD5 by default, depending
-on how was 'chronyd' compiled other allowed hash functions may be SHA1,
-SHA256, SHA384, SHA512, RMD128, RMD160, RMD256, RMD320, TIGER and
-WHIRLPOOL. The password can be encoded as a string of characters not
-containing a space with optional 'ASCII:' prefix or as a hexadecimal
-number with 'HEX:' prefix.
+range 0 through 2**32-1, but ID of 0 can be used only for the command
+key and not for the NTP authentication.  The hash function is MD5 by
+default, depending on how was 'chronyd' compiled other allowed hash
+functions may be SHA1, SHA256, SHA384, SHA512, RMD128, RMD160, RMD256,
+RMD320, TIGER and WHIRLPOOL. The password can be encoded as a string of
+characters not containing a space with optional 'ASCII:' prefix or as a
+hexadecimal number with 'HEX:' prefix.
 
-   For maximum security, it's recommended to use SHA1 or stronger hash
+   The password is used with the hash function to generate and verify a
+message authentication code (MAC) in NTP and command packets.  For
+maximum security, it's recommended to use SHA1 or stronger hash
 function.  The passwords should be random and they should be as long as
 the output size of the configured hash function, e.g.  160 bits with
 SHA1.
@@ -1432,7 +1487,7 @@ SHA1.
 commandkey command (see earlier).  The command key can be generated
 automatically on start with the 'generatecommandkey' directive.
 
-4.2.22 leapsectz
+4.2.25 leapsectz
 ----------------
 
 This directive is used to set the name of the timezone in the system tz
@@ -1454,7 +1509,7 @@ seconds and can be used with this directive
      $ TZ=right/UTC date -d 'Dec 31 2008 23:59:60'
      Wed Dec 31 23:59:60 UTC 2008
 
-4.2.23 local
+4.2.26 local
 ------------
 
 The local keyword is used to allow 'chronyd' to appear synchronised to
@@ -1486,48 +1541,18 @@ like 10 for the local command prevents the machine's own time from ever
 being confused with real time, were it ever to leak out to clients that
 have visibility of real servers.
 
-4.2.24 linux_hz
+4.2.27 lock_all
 ---------------
 
-(This option only applies to Linux).
+The 'lock_all' directive will lock chronyd into RAM so that it will
+never be paged out.  This mode is only supported on Linux.  This
+directive uses the Linux mlockall() system call to prevent 'chronyd'
+from ever being swapped out.  This should result in lower and more
+consistent latency.  It should not have significant impact on
+performance as 'chronyd's' memory usage is modest.  The mlockall man
+page has more details.
 
-   By default, chronyd will find the value of 'HZ' from a kernel header
-file at compile time.  'HZ' is the nominal number of timer interrupts
-per second.  If you're running chronyd on the system where it was built,
-the value it has should be right, and you don't need to worry about this
-option.
-
-   This option is provided for people who move a pre-built chronyd onto
-a system where the value of HZ in the kernel headers has been changed
-from the default value.
-
-   An example of the command is
-
-     linux_hz 100
-
-4.2.25 linux_freq_scale
------------------------
-
-(This option only applies to Linux).
-
-   By default, chronyd will find the value of 'HZ' and 'SHIFT_HZ' from
-kernel header files at compile time.  An internal value called
-'freq_scale' is calculated from this.  By default it is
-(1<<SHIFT_HZ)/HZ, except for the case HZ=100, when special case code is
-used which leads to the value 128/128.125.  If you're running chronyd on
-the system where it was built, the value it has should be right, and you
-don't need to worry about this option.
-
-   This option is provided for people who move a pre-built chronyd onto
-a system where the method by which the kernel computes the reciprocal of
-this value has been changed or where the HZ and SHIFT_HZ constants
-differ from those on the system where chronyd was built.
-
-   An example of the command is
-
-     linux_freq_scale 0.99902439
-
-4.2.26 log
+4.2.28 log
 ----------
 
 The log command indicates that certain information is to be logged.
@@ -1561,7 +1586,7 @@ command.
 
      log measurements statistics tracking
 
-4.2.26.1 Measurements log file format
+4.2.28.1 Measurements log file format
 .....................................
 
 An example line (which actually appears as a single line in the file)
@@ -1603,7 +1628,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.26.2 Statistics log file format
+4.2.28.2 Statistics log file format
 ...................................
 
 An example line (which actually appears as a single line in the file)
@@ -1652,7 +1677,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.26.3 Tracking log file format
+4.2.28.3 Tracking log file format
 .................................
 
 An example line (which actually appears as a single line in the file)
@@ -1690,7 +1715,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.26.4 Real-time clock log file format
+4.2.28.4 Real-time clock log file format
 ........................................
 
 An example line (which actually appears as a single line in the file)
@@ -1728,7 +1753,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.26.5 Refclocks log file format
+4.2.28.5 Refclocks log file format
 ..................................
 
 An example line (which actually appears as a single line in the file)
@@ -1759,7 +1784,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.26.6 Tempcomp log file format
+4.2.28.6 Tempcomp log file format
 .................................
 
 An example line (which actually appears as a single line in the file)
@@ -1781,7 +1806,7 @@ values from the example line above) :
    A banner is periodically written to the log file to indicate the
 meanings of the columns.
 
-4.2.27 logbanner
+4.2.29 logbanner
 ----------------
 
 A banner is periodically written to the log files enabled by the 'log'
@@ -1791,7 +1816,7 @@ directive to indicate the meanings of the columns.
 file should be the banner written.  The default is 32, and 0 can be used
 to disable it entirely.
 
-4.2.28 logchange
+4.2.30 logchange
 ----------------
 
 This directive forces 'chronyd' to send a message to syslog if it makes
@@ -1811,7 +1836,7 @@ somebody can see them.  This allows that person to see if a large error
 has arisen, e.g.  because of a fault, or because of faulty timezone
 handling, for example when summer time (daylight saving) starts or ends.
 
-4.2.29 logdir
+4.2.31 logdir
 -------------
 
 This directive allows the directory where log files are written to be
@@ -1821,7 +1846,7 @@ specified.
 
      logdir /var/log/chrony
 
-4.2.30 mailonchange
+4.2.32 mailonchange
 -------------------
 
 This directive defines an email address to which mail should be sent if
@@ -1835,7 +1860,7 @@ system clock.
    This would send a mail message to root if a change of more than 0.5
 seconds were applied to the system clock.
 
-4.2.31 makestep
+4.2.33 makestep
 ---------------
 
 Normally chronyd will cause the system to gradually correct any time
@@ -1859,7 +1884,21 @@ with NTP sources.
    This would step system clock if the adjustment is larger than 1000
 seconds, but only in the first ten clock updates.
 
-4.2.32 maxchange
+4.2.34 manual
+-------------
+
+The 'manual' directive enables support at run-time for the 'settime'
+command in chronyc (*note settime command::).  If no 'manual' directive
+is included, any attempt to use the 'settime' command in chronyc will be
+met with an error message.
+
+   Note that the 'settime' command can be enabled at run-time using the
+'manual' command in chronyc (*note manual command::).  (The idea of the
+two commands is that the 'manual' command controls the manual clock
+driver's behaviour, whereas the 'settime' command allows samples of
+manually entered time to be provided).
+
+4.2.35 maxchange
 ----------------
 
 This directive sets the maximum allowed offset corrected on a clock
@@ -1878,21 +1917,7 @@ message is sent to syslog.
 every clock update, it will ignore two adjustments larger than 1000
 seconds and exit on another one.
 
-4.2.33 manual
--------------
-
-The 'manual' directive enables support at run-time for the 'settime'
-command in chronyc (*note settime command::).  If no 'manual' directive
-is included, any attempt to use the 'settime' command in chronyc will be
-met with an error message.
-
-   Note that the 'settime' command can be enabled at run-time using the
-'manual' command in chronyc (*note manual command::).  (The idea of the
-two commands is that the 'manual' command controls the manual clock
-driver's behaviour, whereas the 'settime' command allows samples of
-manually entered time to be provided).
-
-4.2.34 maxclockerror
+4.2.36 maxclockerror
 --------------------
 
 The 'maxclockerror' directive sets the maximum assumed frequency error
@@ -1909,7 +1934,7 @@ absolute frequency error.
 to 0.1 for a high quality clock using a temperature compensated crystal
 oscillator.
 
-4.2.35 maxsamples
+4.2.37 maxsamples
 -----------------
 
 The 'maxsamples' directive sets the maximum number of samples 'chronyd'
@@ -1920,7 +1945,22 @@ configurable limit, and the useful range is 4 to 64.
 
      maxsamples <samples>
 
-4.2.36 maxupdateskew
+4.2.38 maxslewrate
+------------------
+
+The 'maxslewrate' directive sets the maximum rate at which 'chronyd' is
+allowed to slew the time.  It limits the slew rate controlled by the
+correction time ratio (*note corrtimeratio directive::) and is effective
+only on systems where 'chronyd' is able to control the rate (so far only
+Linux).
+
+   By default, the maximum slew rate is 83333.333 ppm (one twelfth).
+
+   The syntax is
+
+     maxslewrate <rate-in-ppm>
+
+4.2.39 maxupdateskew
 --------------------
 
 One of 'chronyd's' tasks is to work out how fast or slow the computer's
@@ -1953,7 +1993,7 @@ highly-reliable master estimate and a new estimate is generated which
 has large error bounds, the existing master estimate will dominate in
 the new master estimate.
 
-4.2.37 minsamples
+4.2.40 minsamples
 -----------------
 
 The 'minsamples' directive sets the minimum number of samples 'chronyd'
@@ -1964,34 +2004,21 @@ range is 4 to 64.
 
      minsamples <samples>
 
-4.2.38 noclientlog
+4.2.41 noclientlog
 ------------------
 
 This directive, which takes no arguments, specifies that client accesses
 are not to be logged.  Normally they are logged, allowing statistics to
 be reported using the 'clients' command in 'chronyc'.
 
-4.2.39 clientloglimit
----------------------
-
-This directive specifies the maximum size of the memory allocated to log
-client accesses.  When the limit is reached, only information for
-clients that have already been logged will be updated.  If 0 is
-specified, the memory size will be unlimited.  The default is 524288
-bytes.
-
-   An example of the use of this directive is
-
-     clientloglimit 1048576
-
-4.2.40 peer
+4.2.42 peer
 -----------
 
 The syntax of this directive is identical to that for the 'server'
 directive (*note server directive::), except that it is used to specify
 an NTP peer rather than an NTP server.
 
-4.2.41 pidfile
+4.2.43 pidfile
 --------------
 
 chronyd always writes its process ID (pid) to a file, and checks this
@@ -2001,26 +2028,25 @@ system.  By default, the file used is '/var/run/chronyd.pid'.  The
 
      pidfile /var/tmp/chronyd.pid
 
-4.2.42 port
+4.2.44 port
 -----------
 
-This option allows you to configure the port used for the NTP service on
-your machine.
+This option allows you to configure the port on which 'chronyd' will
+listen for NTP requests.
 
-   The compiled in default is udp/123, the standard NTP port.  It is
-unlikely that you would ever need to change this value.  A possible
-exception would be if you wanted to operate strictly in client-only mode
-and never be available as a server to ntpd clients.  If set to 0, the
-kernel will assign a random port.
+   The compiled in default is udp/123, the standard NTP port.  If set to
+0, 'chronyd' will not open the server socket and will operate strictly
+in a client-only mode.  The source port used in NTP client requests can
+be set by the 'acquisitionport' directive.
 
    An example of the port command is
 
      port 11123
 
-   This would change the NTP port served by chronyd on the computer to
+   This would change the NTP port served by 'chronyd' on the computer to
 udp/11123.
 
-4.2.43 refclock
+4.2.45 refclock
 ---------------
 
 Reference clocks allows very accurate synchronisation and 'chronyd' can
@@ -2028,7 +2054,7 @@ function as a stratum 1 server.  They are specified by the 'refclock'
 directive.  It has two mandatory parameters, a refclock driver name and
 a driver specific parameter.
 
-   There are currently three drivers included:
+   There are currently four drivers included:
 
 'PPS'
      PPSAPI (pulse per second) driver.  The parameter is the path to a
@@ -2041,7 +2067,7 @@ a driver specific parameter.
      local directive::) enabled to work.  For example:
 
           refclock PPS /dev/pps0 lock NMEA
-          refclock SHM 0 offset 0.5 delay 0.1 refid NMEA noselect
+          refclock SHM 0 offset 0.5 delay 0.2 refid NMEA noselect
 
 'SHM'
      NTP shared memory driver.  This driver uses a shared memory segment
@@ -2056,7 +2082,8 @@ a driver specific parameter.
      default '0600'.
 
      Some examples of applications that can be used as SHM sources are
-     'gpsd', 'shmpps' and 'radioclk'.
+     'gpsd' (http://catb.org/gpsd/), 'shmpps' and 'radioclk'
+     (http://www.buzzard.me.uk/jonathan/radioclock.html).
 'SOCK'
      Unix domain socket driver.  It is similar to the SHM driver, but
      uses a different format and uses a socket instead of shared memory.
@@ -2072,20 +2099,32 @@ a driver specific parameter.
 
           refclock SOCK /var/run/chrony.ttyS0.sock
 
+'PHC'
+     PTP hardware clock (PHC) driver.  The parameter is the path to the
+     device of the PTP clock, which can be synchronised by a PTP daemon
+     (e.g.  'ptp4l' from the Linux PTP project
+     (http://linuxptp.sourceforge.net/).  The PTP clocks are typically
+     kept in TAI instead of UTC. The 'offset' option can be used to
+     compensate for the current UTC/TAI offset.  For example:
+
+          refclock PHC /dev/ptp0 poll 3 dpoll -2 offset -35
+
    The 'refclock' command also supports a number of subfields (which may
 be defined in any order):
 
 'poll'
      Timestamps produced by refclock drivers are not used immediately,
-     but they are stored and processed by a median filter in intervals
-     specified by this option.  This is defined as a power of 2.  The
-     default is 4 (16 seconds).  A shorter interval allows 'chronyd' to
-     react faster to changes in clock frequency, but it may decrease the
+     but they are stored and processed by a median filter in the polling
+     interval specified by this option.  This is defined as a power of 2
+     and may be negative to specify a sub-second interval.  The default
+     is 4 (16 seconds).  A shorter interval allows 'chronyd' to react
+     faster to changes in clock frequency, but it may decrease the
      accuracy if the source is too noisy.
 'dpoll'
-     Some drivers are not controlled by external events and thus require
-     polling.  Again this is defined as a power of 2 and can be negative
-     for sub-second intervals.  The default is 0 (1 second).
+     Some drivers don't listen for external events and try to produce
+     samples in their own polling interval.  This is defined as a power
+     of 2 and may be negative to specify a sub-second interval.  The
+     default is 0 (1 second).
 'refid'
      This option is used to specify a reference id of the refclock, as
      up to four ASCII characters.  By default, first three characters
@@ -2114,15 +2153,19 @@ be defined in any order):
      specified offset (in seconds) is applied to all samples produced by
      the refclock.  The default is 0.0.
 'delay'
-     This option is used to specify how the refclock is assumed to be
-     inaccurate (in seconds).  Increasing the value is useful to avoid
-     having no majority in the source selection algorithm or to make the
-     algorithm prefer other refclocks.  The default is 1e-9 (1
-     nanosecond).
+     This option sets the NTP delay of the source (in seconds).  Half of
+     this value is included in the maximum assumed error which is used
+     in the source selection algorithm.  Increasing the delay is useful
+     to avoid having no majority in the algorithm or to make it prefer
+     other sources.  The default is 1e-9 (1 nanosecond).
 'precision'
      Refclock precision (in seconds).  The default is 1e-6 (1
-     microsecond) for SHM refclock, and 1e-9 (1 nanosecond) for SOCK and
-     PPS refclocks.
+     microsecond) for SHM refclock, and 1e-9 (1 nanosecond) for SOCK,
+     PPS and PHC refclocks.
+'maxdispersion'
+     Maximum allowed dispersion for filtered samples (in seconds).
+     Samples with larger estimated dispersion are ignored.  By default,
+     this limit is disabled.
 'prefer'
      Prefer this source over sources without prefer option.
 'noselect'
@@ -2130,7 +2173,7 @@ be defined in any order):
      sources which are not very accurate, but are locked with a PPS
      refclock.
 
-4.2.44 reselectdist
+4.2.46 reselectdist
 -------------------
 
 When 'chronyd' selects synchronisation source from available sources, it
@@ -2144,17 +2187,34 @@ default, the distance is 100 microseconds.
 
      reselectdist <dist-in-seconds>
 
-4.2.45 rtcdevice
+4.2.47 rtcautotrim
+------------------
+
+The 'rtcautotrim' directive is used to keep the real time clock (RTC)
+close to the system clock automatically.  When the system clock is
+synchronized and the estimated error between the two clocks is larger
+than the specified threshold, 'chronyd' will trim the RTC as if the
+'trimrtc' (*note trimrtc command::) command was issued.
+
+   This directive is effective only with the 'rtcfile' directive.
+
+   An example of the use of this directive is
+
+     rtcautotrim 30
+
+   This would set the threshold error to 30 seconds.
+
+4.2.48 rtcdevice
 ----------------
 
 The 'rtcdevice' directive defines the name of the device file for
-accessing the real time clock.  By default this is '/dev/rtc/', unless
+accessing the real time clock.  By default this is '/dev/rtc', unless
 the directive is used to set a different value.  This applies to Linux
 systems with devfs.  An example of use is
 
      rtcdevice /dev/misc/rtc
 
-4.2.46 rtcfile
+4.2.49 rtcfile
 --------------
 
 The 'rtcfile' directive defines the name of the file in which 'chronyd'
@@ -2184,7 +2244,7 @@ apply:
   3. You don't have other applications that need to make use of
      '/dev/rtc' at all.
 
-4.2.47 rtconutc
+4.2.50 rtconutc
 ---------------
 
 'chronyd' assumes by default that the real time clock (RTC) keeps local
@@ -2202,9 +2262,12 @@ starts or ends.
 
    If the 'rtconutc' directive appears, it means the RTC is required to
 keep UTC. The directive takes no arguments.  It is equivalent to
-specifying the '-u' switch to the Linux '/sbin/clock' program.
+specifying the '-u' switch to the Linux '/sbin/hwclock' program.
 
-4.2.48 rtcsync
+   Note that this setting is overriden when the 'hwclockfile' directive
+(*note hwclockfile directive::) is used.
+
+4.2.51 rtcsync
 --------------
 
 The 'rtcsync' directive will enable a kernel mode where the system time
@@ -2214,7 +2277,7 @@ is copied to the real time clock (RTC) every 11 minutes.
 normal RTC tracking is enabled, i.e.  when the 'rtcfile' directive is
 used.
 
-4.2.49 sched_priority
+4.2.52 sched_priority
 ---------------------
 
 The 'sched_priority' directive will select the SCHED_FIFO real-time
@@ -2232,34 +2295,7 @@ consistent latency since 'chronyd' will not need to wait for the
 scheduler to get around to running it.  You should not use this unless
 you really need it.  The sched_setscheduler man page has more details.
 
-4.2.50 stratumweight
---------------------
-
-The 'stratumweight' directive sets how much distance should be added per
-stratum to the synchronisation distance when 'chronyd' selects the
-synchronisation source from available sources.
-
-   The syntax is
-
-     stratumweight <dist-in-seconds>
-
-   By default, it is 1 second.  This usually means that sources with
-lower stratum will be preferred to sources with higher stratum even when
-their distance is significantly worse.  Setting 'stratumweight' to 0
-makes 'chronyd' ignore stratum when selecting the source.
-
-4.2.51 lock_all
----------------
-
-The 'lock_all' directive will lock chronyd into RAM so that it will
-never be paged out.  This mode is only supported on Linux.  This
-directive uses the Linux mlockall() system call to prevent 'chronyd'
-from ever being swapped out.  This should result in lower and more
-consistent latency.  It should not have significant impact on
-performance as 'chronyd's' memory usage is modest.  The mlockall man
-page has more details.
-
-4.2.52 server
+4.2.53 server
 -------------
 
 The 'server' directive allows NTP servers to be specified.  The
@@ -2354,9 +2390,10 @@ number of subfields (which may be defined in any order):
 
      If the key option is present, 'chronyd' will attempt to use
      authenticated packets when communicating with this server.  The key
-     number used will be the single argument to the key option.  The
-     server must have the same password for this key number configured,
-     otherwise no relationship between the computers will be possible.
+     number used will be the single argument to the key option (an
+     unsigned integer in the range 1 through 2**32-1).  The server must
+     have the same password for this key number configured, otherwise no
+     relationship between the computers will be possible.
 
 'offline'
      If the server will not be reachable when 'chronyd' is started, the
@@ -2399,7 +2436,23 @@ number of subfields (which may be defined in any order):
      Never select this source.  This is particularly useful for
      monitoring.
 
-4.2.53 tempcomp
+4.2.54 stratumweight
+--------------------
+
+The 'stratumweight' directive sets how much distance should be added per
+stratum to the synchronisation distance when 'chronyd' selects the
+synchronisation source from available sources.
+
+   The syntax is
+
+     stratumweight <dist-in-seconds>
+
+   By default, it is 1 second.  This usually means that sources with
+lower stratum will be preferred to sources with higher stratum even when
+their distance is significantly worse.  Setting 'stratumweight' to 0
+makes 'chronyd' ignore stratum when selecting the source.
+
+4.2.55 tempcomp
 ---------------
 
 Normally, changes in rate of drift of the system clock are caused mainly
@@ -2441,14 +2494,15 @@ filesystem every 30 seconds.  When the temperature is 26 degress
 degrees (27000), the clock will be set to run 0.183ppm faster than it
 would be without the compensation, etc.
 
-4.2.54 user
+4.2.56 user
 -----------
 
 The 'user' directive sets the name of the user to which will 'chronyd'
-drop root privileges after the initialisation.  So far, it works only on
-Linux when compiled with capabilities support.
+switch on initialisation to drop root privileges.  So far, it works only
+on Linux when compiled with capabilities support.  Setting the name to
+root will disable it.
 
-   By default, root privileges are not dropped.
+   The default value is 'root'.
 
 4.3 Running chronyc
 ===================
@@ -2483,8 +2537,7 @@ Chronyc supports the following command line options.
 '-h <host>'
      This option allows the user to specify which host running the
      'chronyd' program is to be contacted.  This allows for remote
-     configuration, without having to telnet or rlogin to the other host
-     first.
+     configuration, without having to ssh to the other host first.
 
      The default is to contact 'chronyd' running on the same host as
      that where chronyc is being run.
@@ -2633,7 +2686,13 @@ in the configuration file (*note server directive::).
 
      add server foo.bar.com minpoll 6 maxpoll 10 authkey 25
 
-4.3.4.5 allow
+4.3.4.5 allow all
+.................
+
+The effect of the allow command is identical to the 'allow all'
+directive in the configuration file (*note allow directive::).
+
+4.3.4.6 allow
 .............
 
 The effect of the allow command is identical to the 'allow' directive in
@@ -2653,12 +2712,6 @@ the configuration file (*note allow directive::).
 
    The effect of each of these examples is the same as that of the
 'allow' directive in the configuration file.
-
-4.3.4.6 allow all
-.................
-
-The effect of the allow command is identical to the 'allow all'
-directive in the configuration file (*note allow directive::).
 
 4.3.4.7 authhash
 ................
@@ -2806,33 +2859,33 @@ to check whether command access is permitted from a named host.
      cmdaccheck 1.2.3.4
      cmdaccheck 2001:db8::1
 
-4.3.4.11 cmdallow
-.................
-
-This is similar to the 'allow' command, except that it is used to allow
-particular hosts or subnets to use the chronyc program to interact with
-'chronyd' on the current host.
-
-4.3.4.12 cmdallow all
+4.3.4.11 cmdallow all
 .....................
 
 This is similar to the 'allow all' command, except that it is used
 toallow particular hosts or subnets to use the chronyc program to
 interactwith 'chronyd' on the current host.
 
-4.3.4.13 cmddeny
-................
+4.3.4.12 cmdallow
+.................
 
-This is similar to the 'deny' command, except that it is used to allow
+This is similar to the 'allow' command, except that it is used to allow
 particular hosts or subnets to use the chronyc program to interact with
 'chronyd' on the current host.
 
-4.3.4.14 cmddeny all
+4.3.4.13 cmddeny all
 ....................
 
 This is similar to the 'deny all' command, except that it is used to
 allow particular hosts or subnets to use the chronyc program to interact
 with 'chronyd' on the current host.
+
+4.3.4.14 cmddeny
+................
+
+This is similar to the 'deny' command, except that it is used to allow
+particular hosts or subnets to use the chronyc program to interact with
+'chronyd' on the current host.
 
 4.3.4.15 cyclelogs
 ..................
@@ -2863,7 +2916,13 @@ current set of sources.
    There is one parameter, the name or IP address of the server or peer
 to be deleted.
 
-4.3.4.17 deny
+4.3.4.17 deny all
+.................
+
+The effect of the allow command is identical to the 'deny all' directive
+in the configuration file (*note deny directive::).
+
+4.3.4.18 deny
 .............
 
 The effect of the allow command is identical to the 'deny' directive in
@@ -2880,12 +2939,6 @@ the configuration file (*note deny directive::).
      deny 0/0
      deny ::/0
      deny
-
-4.3.4.18 deny all
-.................
-
-The effect of the allow command is identical to the 'deny all' directive
-in the configuration file (*note deny directive::).
 
 4.3.4.19 dns
 ............
@@ -3050,7 +3103,21 @@ host with IPv4 address '1.2.3.4' and the host with IPv6 address
    (Any measurement whose network delay exceeds the specified value is
 discarded.)
 
-4.3.4.27 maxdelayratio
+4.3.4.27 maxdelaydevratio
+.........................
+
+This allows the 'maxdelaydevratio' option for one of the sources to be
+modified, in the same way as specifying the 'maxdelaydevratio' option
+for the 'server' directive in the configuration file (*note server
+directive::).
+
+   The following examples illustrate the syntax
+
+     maxdelaydevratio foo.bar.com 0.1
+     maxdelaydevratio 1.2.3.4 1.0
+     maxdelaydevratio 2001:db8::1 100.0
+
+4.3.4.28 maxdelayratio
 ......................
 
 This allows the 'maxdelayratio' option for one of the sources to be
@@ -3073,20 +3140,6 @@ to be double the retained minimum.
 
    As for 'maxdelay', any measurement whose network delay is too large
 will be discarded.
-
-4.3.4.28 maxdelaydevratio
-.........................
-
-This allows the 'maxdelaydevratio' option for one of the sources to be
-modified, in the same way as specifying the 'maxdelaydevratio' option
-for the 'server' directive in the configuration file (*note server
-directive::).
-
-   The following examples illustrate the syntax
-
-     maxdelaydevratio foo.bar.com 0.1
-     maxdelaydevratio 1.2.3.4 1.0
-     maxdelaydevratio 2001:db8::1 100.0
 
 4.3.4.29 maxpoll
 ................
@@ -3568,7 +3621,9 @@ milliseconds.  If no response is received from 'chronyd', the timeout is
 doubled and the request is resent.  The maximum number of retries is
 configured with the 'retries' command (*note retries command::).
 
-   The default is 1000 milliseconds.
+   By default, the timeout is 1000 milliseconds or 100 milliseconds if
+'chronyc' is contacting localhost (i.e.  the '-h' option wasn't
+specified) and 'chronyd' was compiled with asynchronous name resolving.
 
 4.3.4.46 tracking
 .................
@@ -3726,6 +3781,9 @@ is provided as a method by which it can be corrected, in a manner
 compatible with 'chronyd' using it to maintain accurate time across
 machine reboots.
 
+   The 'trimrtc' command can be executed automatically by 'chronyd' with
+the 'rtcautotrim' directive (*note rtcautotrim directive::).
+
 4.3.4.48 waitsync
 .................
 
@@ -3757,84 +3815,302 @@ The 'writertc' command writes the currently estimated error and
 gain/loss rate parameters for the RTC to the RTC file (specified with
 the 'rtcfile' directive (*note rtcfile directive::)).  This information
 is also written automatically when 'chronyd' is killed (with SIGHUP,
-SIGINT, SIGQUIT or SIGTERM).
+SIGINT, SIGQUIT or SIGTERM) or when the 'trimrtc' command is issued.
 
-Appendix A Porting guide
-************************
+5 Frequently asked questions
+****************************
 
-This appendix discusses issues that have arisen in writing the
-system-specific parts of the existing ports.  This will provide useful
-information for those attempting to write ports to other systems.
+5.1 Administrative issues
+=========================
 
-A.1 System driver files
+5.1.1 Where can I get chrony source code?
+-----------------------------------------
+
+Tarballs are available via the 'Download' link on the chrony web site.
+For the current development from the developers' version control system
+see the 'Git' link on the web site.
+
+5.1.2 Are there any packaged versions of chrony?
+------------------------------------------------
+
+We are aware of packages for Arch, Debian, Fedora, Gentoo, Mandriva,
+Slackware, Ubuntu, FreeBSD and NetBSD. We are not involved with how
+these are built or distributed.
+
+5.1.3 Where is the home page?
+-----------------------------
+
+It is currently at http://chrony.tuxfamily.org
+(http://chrony.tuxfamily.org).
+
+5.1.4 Is there a mailing list?
+------------------------------
+
+Yes, it's currently at <chrony-users@chrony.tuxfamily.org>.  There is a
+low-volume list called chrony-announce which is just for announcements
+of new releases or similar matters of high importance.  You can join the
+lists by sending a message with the subject subscribe to
+<chrony-users-request@chrony.tuxfamily.org> or
+<chrony-announce-request@chrony.tuxfamily.org> respectively.
+
+   For those who want to contribute to the development of chrony, there
+is a developers' mailing list.  You can subscribe by sending mail with
+the subject subscribe to <chrony-dev-request@chrony.tuxfamily.org>.
+
+5.1.5 What licence is applied to chrony?
+----------------------------------------
+
+Starting from version 1.15, chrony is licensed under the GNU General
+Public License, Version 2.  Versions prior to 1.15 were licensed under a
+custom BSD-like license.
+
+5.2 Chrony compared to other programs
+=====================================
+
+5.2.1 How does chrony compare to ntpd?
+--------------------------------------
+
+Chrony can usually synchronise the system clock faster and with better
+time accuracy, but it doesn't implement all NTP features, e.g.
+broadcast/multicast mode, or authentication based on public-key
+cryptography.  For a more detailed comparison, see section 'Comparison
+with ntpd' in the manual.
+
+   If your computer connects to the 'net only for few minutes at a time,
+you turn your Linux computer off or suspend it frequently, the clock is
+not very stable (e.g.  it is a virtual machine), or you want to use NTP
+on an isolated network with no hardware clocks in sight, chrony will
+probably work much better for you.
+
+   The original reason chrony was written was that ntpd (called xntpd at
+the time) could not to do anything sensible on a PC which was connected
+to the 'net only for about 5 minutes once or twice a day, mainly to
+upload/download email and news.  The requirements were
+
+   * slew the time to correct it when going online and NTP servers
+     become visible
+   * determine the rate at which the computer gains or loses time and
+     use this information to keep it reasonably correct between connects
+     to the 'net.  This has to be done using a method that does not care
+     about the intermittent availability of the references or the fact
+     the computer is turned off between groups of measurements.
+   * maintain the time across reboots, by working out the error and
+     drift rate of the computer's real-time clock and using this
+     information to set the system clock correctly at boot up.
+
+   Also, when working with isolated networks with no true time
+references at all ntpd was found to give no help with managing the local
+clock's gain/loss rate on the NTP master node (which was set from
+watch).  Some automated support was added to chrony to deal with this.
+
+5.3 Configuration issues
+========================
+
+5.3.1 I have several computers on a LAN. Should be all clients of an external server?
+-------------------------------------------------------------------------------------
+
+The best configuration is usually to make one computer the master, with
+the others as clients of it.  Add a 'local' directive to the master's
+chrony.conf file.  This configuration will be better because
+
+   * the load on the external connection is less
+   * the load on the external NTP server(s) is less
+   * if your external connection goes down, the computers on the LAN
+     will maintain a common time with each other.
+
+5.3.2 Must I specify servers by IP address if DNS is not available on chronyd start?
+------------------------------------------------------------------------------------
+
+No.  Starting from version 1.25, 'chronyd' will keep trying to resolve
+the hostnames specified in the 'server' and 'peer' directives in
+increasing intervals until it succeeds.  The 'online' command can be
+issued from 'chronyc' to try to resolve them immediately.
+
+5.3.3 How can I make chronyd more secure?
+-----------------------------------------
+
+If you don't need to serve time to NTP clients, you can add 'port 0' to
+the 'chrony.conf' file to disable the NTP server/peer sockets and
+prevent NTP requests from reaching 'chronyd'.
+
+   If you don't need to use 'chronyc' remotely, you can add the
+following directives to the configuration file to bind the command
+sockets to the loopback interface
+
+     bindcmdaddress 127.0.0.1
+     bindcmdaddress ::1
+
+   If you don't need to use 'chronyc' at all, you can disable the
+command sockets by adding 'cmdport 0' to the configuration file.
+
+5.4 Computer is not synchronising
+=================================
+
+This is the most common problem.  There are a number of reasons, see the
+following questions.
+
+5.4.1 Behind a firewall?
+------------------------
+
+If there is a firewall between you and the NTP server you're trying to
+use, the packets may be blocked.  Try using a tool like wireshark or
+tcpdump to see if you're getting responses from the server.  If you have
+an external modem, see if the receive light blinks straight after the
+transmit light (when the link is quiet apart from the NTP traffic.)  Try
+adding 'log measurements' to the 'chrony.conf' file and look in the
+measurements.log file after chrony has been running for a short period.
+See if any measurements appear.
+
+5.4.2 Do you have a non-permanent (i.e. intermittent) Internet connection?
+--------------------------------------------------------------------------
+
+Check that you're using chronyc's 'online' and 'offline' commands
+appropriately.  Again, check in measurements.log to see if you're
+getting any data back from the server.
+
+5.4.3 In measurements.log, do the '7' and '8' flag columns always show zero?
+----------------------------------------------------------------------------
+
+Do you have a 'local stratum X' directive in the 'chrony.conf' file?  If
+X is lower than the stratum of the server you're trying to use, this
+situation will arise.  You should always make X quite high (e.g.  10) in
+this directive.
+
+5.5 Issues with chronyc
 =======================
 
-The system specific parts of the software are contained in files with
-names like 'sys_linux.c'.
+5.5.1 I keep getting the error '506 Cannot talk to daemon'
+----------------------------------------------------------
 
-   The following functions are required in a system driver file:
+Make sure that the 'chrony.conf' file (on the computer where 'chronyd'
+is running) has a 'cmdallow' entry for the computer you are running
+'chronyc' on.  This isn't necessary for localhost.
 
-  1. A function to read the current frequency
-  2. A function to set the current frequency
-  3. A function to slew the system time by a specified delta
-  4. A function to step the system time by a specified delta
-  5. A function to work out the error at a particular time between the
-     system's clock and 'chronyd's' estimate of real time.  (This is
-     required because some systems have to track real time by making the
-     system time follow it in a 'sawtooth' fashion).
+   Perhaps 'chronyd' is not running.  Try using the ps command (e.g.  on
+Linux, 'ps -auxw') to see if it's running.  Or try 'netstat -a' and see
+if the ports 123/udp and 323/udp are listening.  If 'chronyd' is not
+running, you may have a problem with the way you are trying to start it
+(e.g.  at boot time).
 
-   The "frequency" is the rate at which the system gains or loses time,
-measured relative to the system when running uncompensated.
+   Perhaps you have a firewall set up in a way that blocks packets on
+port 323/udp.  You need to amend the firewall configuration in this
+case.
 
-A.2 Quirks of particular systems
-================================
+5.5.2 Is the chronyc<->chronyd protocol documented anywhere?
+------------------------------------------------------------
 
-These sections describe quirks in each system type that needed to be
-investigated to port the software to each system type.
+Only by the source code :-) See cmdmon.c ('chronyd' side) and client.c
+('chronyc' side).
 
-A.2.1 Linux
------------
+5.6 Real-time clock issues
+==========================
 
-The following quirks have been found in developing the Linux port.
+5.6.1 What is the real-time clock (RTC)?
+----------------------------------------
 
-  1. In order to avoid floating point arithmetic, the kernel uses
-     shifting and adding to approximate a scaling of 100/128.  This
-     approximation implies that the frequency set via the 'adjtimex()'
-     system call is not the frequency that is actually obtained.  The
-     method of approximation varies between kernel versions and must be
-     determined by examining the kernel source.  An inverse factor must
-     be included in the driver to compensate.
-  2. In some kernel versions, an 'adjtimex()' system call with the flags
-     bits all zeroed will return the amount of offset still to be
-     corrected.  In others (e.g.  the 2.0 series beyond 2.0.32), the
-     offset must be changed in order to get the old offset returned
-     (similar to 'adjtime()' on other systems).
+This is the clock which keeps the time even when your computer is turned
+off.  It works with 1 second resolution.  'chronyd' can monitor the rate
+at which the real-time clock gains or loses time, and compensate for it
+when you set the system time from it at the next reboot.  See the
+documentation for details.
 
-A.2.2 Solaris 2.5
------------------
+5.6.2 I want to use chronyd's real-time clock support. Must I disable hwclock?
+------------------------------------------------------------------------------
 
-The following quirks have been found in developing the Solaris port.
+The hwclock program is often set-up by default in the boot and shutdown
+scripts with many Linux installations.  If you want to use chronyd's
+real-time clock support, the important thing is to disable hwclock in
+the shutdown procedure.  If you don't, it will over-write the RTC with a
+new value, unknown to 'chronyd'.  At the next reboot, 'chronyd' will
+compensate this (wrong) time with its estimate of how far the RTC has
+drifted whilst the power was off, giving a meaningless initial system
+time.
 
-  1. The 'adjtime()' system call with a zero argument does not cancel an
-     adjustment that is in progress - it just reports the remaining
-     adjustment.
-  2. The 'settimeofday()' system call only observes the seconds part of
-     the argument - any fractional seconds part is lost.  second.
-  3. The kernel variable 'dosynctodr' has to be set to zero, otherwise
-     the system clock is periodically reset to the real-time clock.
+   There is no need to remove hwclock from the boot process, as long as
+'chronyd' is started after it has run.
 
-A.2.3 SunOS 4.1.4
------------------
+5.6.3 I just keep getting the '513 RTC driver not running' message
+------------------------------------------------------------------
 
-The following quirks have been found in developing the SunOS port.
+For the real time clock support to work, you need the following three
+things
+   * a kernel that is supported (e.g.  2.2 onwards)
+   * enhanced RTC support compiled into the kernel
+   * an 'rtcfile' directive in your chrony.conf file
 
-  1. The 'adjtime()' system call truncates its argument to a multiple of
-     the system's 'tickadj' variable.  ('chronyd' sets that to 100,
-     giving a 1 part in 100 slewing capability for correcting offsets.)
-  2. The kernel variable 'dosynctodr' has to be set to zero, otherwise
-     the system clock is periodically reset to the real-time clock.
+5.7 Microsoft Windows
+=====================
 
-Appendix B GNU General Public License
+5.7.1 Does chrony support Windows?
+----------------------------------
+
+No.  The 'chronyc' program (the command-line client used for configuring
+'chronyd' while it is running) has been successfully built and run under
+Cygwin in the past.  'chronyd' is not portable, because part of it is
+very system-dependent.  It needs adapting to work with Windows'
+equivalent of the adjtimex() call, and it needs to be made to work as an
+NT service.
+
+5.7.2 Are there any plans to support Windows?
+---------------------------------------------
+
+We have no plans to do this.  Anyone is welcome to pick this work up and
+contribute it back to the project.
+
+5.8 NTP-specific issues
+=======================
+
+5.8.1 Can chrony be driven from broadcast NTP servers?
+------------------------------------------------------
+
+No, this NTP mode is not implemented yet.
+
+5.8.2 Can chronyd transmit broadcast NTP packets (e.g. to synchronise other computers on a private LAN)?
+--------------------------------------------------------------------------------------------------------
+
+Yes.  Starting from version 1.17, chrony has this capability.
+
+5.8.3 Can chrony keep the system clock a fixed offset away from real time?
+--------------------------------------------------------------------------
+
+This is not possible as the program currently stands.
+
+5.8.4 What happens if the network connection is dropped without using chronyc's 'offline' command first?
+--------------------------------------------------------------------------------------------------------
+
+In this case 'chronyd' will keep trying to access the server(s) that it
+thinks are online.  Eventually it will decide that they are unreachable
+and no longer consider itself synchronised to them.  If you have other
+computers on your LAN accessing the computer that is affected this way,
+they too will become 'unsynchronised', unless you have the 'local'
+directive set up on the master computer.
+
+   The 'auto_offline' option to the 'server' entry in the chrony.conf
+file may be useful to avoid this situation.
+
+5.9 Linux-specific issues
+=========================
+
+5.9.1 I get "Could not open /dev/rtc, Device or resource busy" in my syslog file
+--------------------------------------------------------------------------------
+
+Some other program running on the system may be using the device.
+
+5.10 Solaris-specific issues
+============================
+
+5.10.1 On Solaris 2.8, I get an error message about not being able to open kvm to change dosynctodr
+---------------------------------------------------------------------------------------------------
+
+(The dosynctodr variable controls whether Solaris couples the equivalent
+of its BIOS clock into its system clock at regular intervals).  The
+Solaris port of chrony was developed in the Solaris 2.5 era.  Some
+aspect of the Solaris kernel has changed which prevents the same
+technique working.  We no longer have root access to any Solaris
+machines to work on this, and we are reliant on somebody developing the
+patch and testing it.
+
+Appendix A GNU General Public License
 *************************************
 
                       GNU GENERAL PUBLIC LICENSE
@@ -4208,63 +4484,65 @@ GNU Lesser General Public License instead of this License.
     4.2.1 Comments in the configuration file
     4.2.2 acquisitionport
     4.2.3 allow
-    4.2.4 bindaddress
-    4.2.5 bindcmdaddress
-    4.2.6 broadcast
-    4.2.7 cmdallow
-    4.2.8 cmddeny
-    4.2.9 combinelimit
-    4.2.10 commandkey
+    4.2.4 bindacqaddress
+    4.2.5 bindaddress
+    4.2.6 bindcmdaddress
+    4.2.7 broadcast
+    4.2.8 clientloglimit
+    4.2.9 cmdallow
+    4.2.10 cmddeny
     4.2.11 cmdport
-    4.2.12 corrtimeratio
-    4.2.13 deny
-    4.2.14 driftfile
-    4.2.15 dumpdir
-    4.2.16 dumponexit
-    4.2.17 fallbackdrift
-    4.2.18 generatecommandkey
-    4.2.19 include
-    4.2.20 initstepslew
-    4.2.21 keyfile
-    4.2.22 leapsectz
-    4.2.23 local
-    4.2.24 linux_hz
-    4.2.25 linux_freq_scale
-    4.2.26 log
-      4.2.26.1 Measurements log file format
-      4.2.26.2 Statistics log file format
-      4.2.26.3 Tracking log file format
-      4.2.26.4 Real-time clock log file format
-      4.2.26.5 Refclocks log file format
-      4.2.26.6 Tempcomp log file format
-    4.2.27 logbanner
-    4.2.28 logchange
-    4.2.29 logdir
-    4.2.30 mailonchange
-    4.2.31 makestep
-    4.2.32 maxchange
-    4.2.33 manual
-    4.2.34 maxclockerror
-    4.2.35 maxsamples
-    4.2.36 maxupdateskew
-    4.2.37 minsamples
-    4.2.38 noclientlog
-    4.2.39 clientloglimit
-    4.2.40 peer
-    4.2.41 pidfile
-    4.2.42 port
-    4.2.43 refclock
-    4.2.44 reselectdist
-    4.2.45 rtcdevice
-    4.2.46 rtcfile
-    4.2.47 rtconutc
-    4.2.48 rtcsync
-    4.2.49 sched_priority
-    4.2.50 stratumweight
-    4.2.51 lock_all
-    4.2.52 server
-    4.2.53 tempcomp
-    4.2.54 user
+    4.2.12 combinelimit
+    4.2.13 commandkey
+    4.2.14 corrtimeratio
+    4.2.15 deny
+    4.2.16 driftfile
+    4.2.17 dumpdir
+    4.2.18 dumponexit
+    4.2.19 fallbackdrift
+    4.2.20 generatecommandkey
+    4.2.21 hwclockfile
+    4.2.22 include
+    4.2.23 initstepslew
+    4.2.24 keyfile
+    4.2.25 leapsectz
+    4.2.26 local
+    4.2.27 lock_all
+    4.2.28 log
+      4.2.28.1 Measurements log file format
+      4.2.28.2 Statistics log file format
+      4.2.28.3 Tracking log file format
+      4.2.28.4 Real-time clock log file format
+      4.2.28.5 Refclocks log file format
+      4.2.28.6 Tempcomp log file format
+    4.2.29 logbanner
+    4.2.30 logchange
+    4.2.31 logdir
+    4.2.32 mailonchange
+    4.2.33 makestep
+    4.2.34 manual
+    4.2.35 maxchange
+    4.2.36 maxclockerror
+    4.2.37 maxsamples
+    4.2.38 maxslewrate
+    4.2.39 maxupdateskew
+    4.2.40 minsamples
+    4.2.41 noclientlog
+    4.2.42 peer
+    4.2.43 pidfile
+    4.2.44 port
+    4.2.45 refclock
+    4.2.46 reselectdist
+    4.2.47 rtcautotrim
+    4.2.48 rtcdevice
+    4.2.49 rtcfile
+    4.2.50 rtconutc
+    4.2.51 rtcsync
+    4.2.52 sched_priority
+    4.2.53 server
+    4.2.54 stratumweight
+    4.2.55 tempcomp
+    4.2.56 user
   4.3 Running chronyc
     4.3.1 Basic use
     4.3.2 Command line options
@@ -4274,20 +4552,20 @@ GNU Lesser General Public License instead of this License.
       4.3.4.2 activity
       4.3.4.3 add peer
       4.3.4.4 add server
-      4.3.4.5 allow
-      4.3.4.6 allow all
+      4.3.4.5 allow all
+      4.3.4.6 allow
       4.3.4.7 authhash
       4.3.4.8 burst
       4.3.4.9 clients
       4.3.4.10 cmdaccheck
-      4.3.4.11 cmdallow
-      4.3.4.12 cmdallow all
-      4.3.4.13 cmddeny
-      4.3.4.14 cmddeny all
+      4.3.4.11 cmdallow all
+      4.3.4.12 cmdallow
+      4.3.4.13 cmddeny all
+      4.3.4.14 cmddeny
       4.3.4.15 cyclelogs
       4.3.4.16 delete
-      4.3.4.17 deny
-      4.3.4.18 deny all
+      4.3.4.17 deny all
+      4.3.4.18 deny
       4.3.4.19 dns
       4.3.4.20 dump
       4.3.4.21 exit
@@ -4296,8 +4574,8 @@ GNU Lesser General Public License instead of this License.
       4.3.4.24 makestep
       4.3.4.25 manual
       4.3.4.26 maxdelay
-      4.3.4.27 maxdelayratio
-      4.3.4.28 maxdelaydevratio
+      4.3.4.27 maxdelaydevratio
+      4.3.4.28 maxdelayratio
       4.3.4.29 maxpoll
       4.3.4.30 maxupdateskew
       4.3.4.31 minpoll
@@ -4319,10 +4597,40 @@ GNU Lesser General Public License instead of this License.
       4.3.4.47 trimrtc
       4.3.4.48 waitsync
       4.3.4.49 writertc
-Appendix A Porting guide
-  A.1 System driver files
-  A.2 Quirks of particular systems
-    A.2.1 Linux
-    A.2.2 Solaris 2.5
-    A.2.3 SunOS 4.1.4
-Appendix B GNU General Public License
+5 Frequently asked questions
+  5.1 Administrative issues
+    5.1.1 Where can I get chrony source code?
+    5.1.2 Are there any packaged versions of chrony?
+    5.1.3 Where is the home page?
+    5.1.4 Is there a mailing list?
+    5.1.5 What licence is applied to chrony?
+  5.2 Chrony compared to other programs
+    5.2.1 How does chrony compare to ntpd?
+  5.3 Configuration issues
+    5.3.1 I have several computers on a LAN. Should be all clients of an external server?
+    5.3.2 Must I specify servers by IP address if DNS is not available on chronyd start?
+    5.3.3 How can I make chronyd more secure?
+  5.4 Computer is not synchronising
+    5.4.1 Behind a firewall?
+    5.4.2 Do you have a non-permanent (i.e. intermittent) Internet connection?
+    5.4.3 In measurements.log, do the '7' and '8' flag columns always show zero?
+  5.5 Issues with chronyc
+    5.5.1 I keep getting the error '506 Cannot talk to daemon'
+    5.5.2 Is the chronyc<->chronyd protocol documented anywhere?
+  5.6 Real-time clock issues
+    5.6.1 What is the real-time clock (RTC)?
+    5.6.2 I want to use chronyd's real-time clock support. Must I disable hwclock?
+    5.6.3 I just keep getting the '513 RTC driver not running' message
+  5.7 Microsoft Windows
+    5.7.1 Does chrony support Windows?
+    5.7.2 Are there any plans to support Windows?
+  5.8 NTP-specific issues
+    5.8.1 Can chrony be driven from broadcast NTP servers?
+    5.8.2 Can chronyd transmit broadcast NTP packets (e.g. to synchronise other computers on a private LAN)?
+    5.8.3 Can chrony keep the system clock a fixed offset away from real time?
+    5.8.4 What happens if the network connection is dropped without using chronyc's 'offline' command first?
+  5.9 Linux-specific issues
+    5.9.1 I get "Could not open /dev/rtc, Device or resource busy" in my syslog file
+  5.10 Solaris-specific issues
+    5.10.1 On Solaris 2.8, I get an error message about not being able to open kvm to change dosynctodr
+Appendix A GNU General Public License

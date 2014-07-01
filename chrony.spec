@@ -1,4 +1,4 @@
-%global chrony_version 1.29.1
+%global chrony_version 1.30
 %if 0%(echo %{chrony_version} | grep -q pre && echo 1)
 %global prerelease %(echo %{chrony_version} | sed 's/.*-//')
 %endif

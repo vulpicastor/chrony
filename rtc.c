@@ -84,7 +84,7 @@ RTC_Initialise(void)
   file_name = CNF_GetRtcFile();
 
   if (file_name) {
-    if (CNF_GetRTCSync()) {
+    if (CNF_GetRtcSync()) {
       LOG_FATAL(LOGF_Rtc, "rtcfile directive cannot be used with rtcsync");
     }
 
@@ -144,7 +144,7 @@ RTC_TimeInit(void (*after_hook)(void *), void *anything)
 
 /* ================================================== */
 /* Do an initial read of the RTC and set the system time to it.  This
-   is analogous to what /sbin/clock -s -u would do on Linux. */
+   is analogous to what /sbin/hwclock -s would do on Linux. */
 
 void
 RTC_TimePreInit(void)

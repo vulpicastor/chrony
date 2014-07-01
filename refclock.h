@@ -43,6 +43,7 @@ typedef struct {
   double offset;
   double delay;
   double precision;
+  double max_dispersion;
   SRC_SelectOption sel_option;
 } RefclockParameters;
 
@@ -57,7 +58,6 @@ typedef struct {
 extern void RCL_Initialise(void);
 extern void RCL_Finalise(void);
 extern int RCL_AddRefclock(RefclockParameters *params);
-extern void RCL_StartRefclocks(void);
 extern void RCL_StartRefclocks(void);
 extern void RCL_ReportSource(RPT_SourceReport *report, struct timeval *now);
 

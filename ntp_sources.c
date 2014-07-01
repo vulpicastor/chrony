@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011-2012
+ * Copyright (C) Miroslav Lichvar  2011-2012, 2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -37,7 +37,7 @@
 #include "logging.h"
 #include "local.h"
 #include "memory.h"
-#include "nameserv.h"
+#include "nameserv_async.h"
 #include "sched.h"
 
 /* ================================================== */
@@ -62,6 +62,9 @@ static int n_sources;
 /* The largest number of sources we want to have stored in the hash table */
 #define MAX_SOURCES 64
 
+/* Flag indicating new sources will be started automatically when added */
+static int auto_start_sources = 0;
+
 /* Source with unknown address (which may be resolved later) */
 struct UnresolvedSource {
   char *name;
@@ -71,18 +74,27 @@ struct UnresolvedSource {
   struct UnresolvedSource *next;
 };
 
+#define RESOLVE_INTERVAL_UNIT 7
+#define MIN_RESOLVE_INTERVAL 2
+#define MAX_RESOLVE_INTERVAL 9
+
 static struct UnresolvedSource *unresolved_sources = NULL;
 static int resolving_interval = 0;
 static SCH_TimeoutID resolving_id;
+static struct UnresolvedSource *resolving_source = NULL;
+static NSR_SourceResolvingEndHandler resolving_end_handler = NULL;
 
 /* ================================================== */
 /* Forward prototypes */
+
+static void resolve_sources(void *arg);
+
 static void
 slew_sources(struct timeval *raw,
              struct timeval *cooked,
              double dfreq,
              double doffset,
-             int is_step_change,
+             LCL_ChangeType change_type,
              void *anything);
 
 /* ================================================== */
@@ -188,10 +200,6 @@ NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParam
 
   assert(initialised);
 
-#if 0
-  LOG(LOGS_INFO, LOGF_NtpSources, "IP=%s port=%d", UTI_IPToString(&remote_addr->ip_addr), remote_addr->port);
-#endif
-
   /* Find empty bin & check that we don't have the address already */
   find_slot(remote_addr, &slot, &found);
   if (found) {
@@ -206,6 +214,8 @@ NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParam
       n_sources++;
       records[slot].data = NCR_GetInstance(remote_addr, type, params); /* Will need params passing through */
       records[slot].remote_addr = NCR_GetRemoteAddress(records[slot].data);
+      if (auto_start_sources)
+        NCR_StartInstance(records[slot].data);
       return NSR_Success;
     }
   }
@@ -214,43 +224,89 @@ NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParam
 /* ================================================== */
 
 static void
+name_resolve_handler(DNS_Status status, IPAddr *ip_addr, void *anything)
+{
+  struct UnresolvedSource *us, **i, *next;
+  NTP_Remote_Address address;
+
+  us = (struct UnresolvedSource *)anything;
+
+  assert(us == resolving_source);
+
+  switch (status) {
+    case DNS_TryAgain:
+      break;
+    case DNS_Success:
+      DEBUG_LOG(LOGF_NtpSources, "%s resolved to %s", us->name, UTI_IPToString(ip_addr));
+      address.ip_addr = *ip_addr;
+      address.port = us->port;
+      NSR_AddSource(&address, us->type, &us->params);
+      break;
+    case DNS_Failure:
+      LOG(LOGS_WARN, LOGF_NtpSources, "Invalid host %s", us->name);
+      break;
+    default:
+      assert(0);
+  }
+
+  next = us->next;
+
+  if (status != DNS_TryAgain) {
+    /* Remove the source from the list */
+    for (i = &unresolved_sources; *i; i = &(*i)->next) {
+      if (*i == us) {
+        *i = us->next;
+        Free(us->name);
+        Free(us);
+        break;
+      }
+    }
+  }
+
+  resolving_source = next;
+
+  if (next) {
+    /* Continue with the next source in the list */
+    DEBUG_LOG(LOGF_NtpSources, "resolving %s", next->name);
+    DNS_Name2IPAddressAsync(next->name, name_resolve_handler, next);
+  } else {
+    /* This was the last source in the list. If some sources couldn't
+       be resolved, try again in exponentially increasing interval. */
+    if (unresolved_sources) {
+      if (resolving_interval < MIN_RESOLVE_INTERVAL)
+        resolving_interval = MIN_RESOLVE_INTERVAL;
+      else if (resolving_interval < MAX_RESOLVE_INTERVAL)
+        resolving_interval++;
+      resolving_id = SCH_AddTimeoutByDelay(RESOLVE_INTERVAL_UNIT *
+          (1 << resolving_interval), resolve_sources, NULL);
+    } else {
+      resolving_interval = 0;
+    }
+
+    /* This round of resolving is done */
+    if (resolving_end_handler)
+      (resolving_end_handler)();
+  }
+}
+
+/* ================================================== */
+
+static void
 resolve_sources(void *arg)
 {
-  NTP_Remote_Address address;
-  struct UnresolvedSource *us, **i;
-  DNS_Status s;
+  struct UnresolvedSource *us;
 
-  memset(&address.local_ip_addr, 0, sizeof (address.local_ip_addr));
+  assert(!resolving_source);
 
   DNS_Reload();
 
-  for (i = &unresolved_sources; *i; ) {
-    us = *i;
-    s = DNS_Name2IPAddress(us->name, &address.ip_addr);
-    if (s == DNS_TryAgain) {
-      i = &(*i)->next;
-      continue;
-    } else if (s == DNS_Success) {
-      address.port = us->port;
-      NSR_AddSource(&address, us->type, &us->params);
-    } else {
-      LOG(LOGS_WARN, LOGF_NtpSources, "Invalid host %s", us->name);
-    }
-    
-    *i = us->next;
+  /* Start with the first source in the list, name_resolve_handler
+     will iterate over the rest */
+  us = unresolved_sources;
 
-    Free(us->name);
-    Free(us);
-  }
-
-  if (unresolved_sources) {
-    /* Try again later */
-    if (resolving_interval < 9)
-      resolving_interval++;
-    resolving_id = SCH_AddTimeoutByDelay(7 * (1 << resolving_interval), resolve_sources, NULL);
-  } else {
-    resolving_interval = 0;
-  }
+  resolving_source = us;
+  DEBUG_LOG(LOGF_NtpSources, "resolving %s", us->name);
+  DNS_Name2IPAddressAsync(us->name, name_resolve_handler, us);
 }
 
 /* ================================================== */
@@ -273,11 +329,14 @@ NSR_AddUnresolvedSource(char *name, int port, NTP_Source_Type type, SourceParame
   for (i = &unresolved_sources; *i; i = &(*i)->next)
     ;
   *i = us;
+}
 
-  if (!resolving_interval) {
-    resolving_interval = 2;
-    resolving_id = SCH_AddTimeoutByDelay(7 * (1 << resolving_interval), resolve_sources, NULL);
-  }
+/* ================================================== */
+
+void
+NSR_SetSourceResolvingEndHandler(NSR_SourceResolvingEndHandler handler)
+{
+  resolving_end_handler = handler;
 }
 
 /* ================================================== */
@@ -286,11 +345,40 @@ void
 NSR_ResolveSources(void)
 {
   /* Try to resolve unresolved sources now */
-  if (resolving_interval) {
-    SCH_RemoveTimeout(resolving_id);
-    resolving_interval--;
-    resolve_sources(NULL);
+  if (unresolved_sources) {
+    /* Make sure no resolving is currently running */
+    if (!resolving_source) {
+      if (resolving_interval) {
+        SCH_RemoveTimeout(resolving_id);
+        resolving_interval--;
+      }
+      resolve_sources(NULL);
+    }
+  } else {
+    /* No unresolved sources, we are done */
+    if (resolving_end_handler)
+      (resolving_end_handler)();
   }
+}
+
+/* ================================================== */
+
+void NSR_StartSources(void)
+{
+  int i;
+
+  for (i = 0; i < N_RECORDS; i++) {
+    if (!records[i].remote_addr)
+      continue;
+    NCR_StartInstance(records[i].data);
+  }
+}
+
+/* ================================================== */
+
+void NSR_AutoStartSources(void)
+{
+  auto_start_sources = 1;
 }
 
 /* ================================================== */
@@ -341,26 +429,36 @@ NSR_RemoveSource(NTP_Remote_Address *remote_addr)
 
 /* ================================================== */
 
+void
+NSR_RemoveAllSources(void)
+{
+  int i;
+
+  for (i = 0; i < N_RECORDS; i++) {
+    if (!records[i].remote_addr)
+      continue;
+    NCR_DestroyInstance(records[i].data);
+    records[i].remote_addr = NULL;
+  }
+}
+
+/* ================================================== */
+
 /* This routine is called by ntp_io when a new packet arrives off the network,
    possibly with an authentication tail */
 void
-NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, int length)
+NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr, int length)
 {
   int slot, found;
 
   assert(initialised);
 
-#if 0
-  LOG(LOGS_INFO, LOGF_NtpSources, "from (%s,%d) at %s",
-      UTI_IPToString(&remote_addr->ip_addr),
-      remote_addr->port, UTI_TimevalToString(now));
-#endif
-  
   find_slot(remote_addr, &slot, &found);
   if (found == 2) { /* Must match IP address AND port number */
-    NCR_ProcessKnown(message, now, now_err, records[slot].data, length);
+    NCR_ProcessKnown(message, now, now_err, records[slot].data,
+                     local_addr->sock_fd, length);
   } else {
-    NCR_ProcessUnknown(message, now, now_err, remote_addr, length);
+    NCR_ProcessUnknown(message, now, now_err, remote_addr, local_addr, length);
   }
 }
 
@@ -371,22 +469,20 @@ slew_sources(struct timeval *raw,
              struct timeval *cooked,
              double dfreq,
              double doffset,
-             int is_step_change,
+             LCL_ChangeType change_type,
              void *anything)
 {
   int i;
 
   for (i=0; i<N_RECORDS; i++) {
     if (records[i].remote_addr) {
-#if 0
-      LOG(LOGS_INFO, LOGF_Sources, "IP=%s dfreq=%f doff=%f",
-          UTI_IPToString(&records[i].remote_addr->ip_addr), dfreq, doffset);
-#endif
-
-      NCR_SlewTimes(records[i].data, cooked, dfreq, doffset);
+      if (change_type == LCL_ChangeUnknownStep) {
+        NCR_ResetInstance(records[i].data);
+      } else {
+        NCR_SlewTimes(records[i].data, cooked, dfreq, doffset);
+      }
     }
   }
-
 }
 
 /* ================================================== */

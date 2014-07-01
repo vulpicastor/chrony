@@ -164,13 +164,6 @@ UTI_AverageDiffTimevals (struct timeval *earlier,
        be backwards, or something wierd has happened.  Maybe when we
        change the frequency on Linux? */
 
-    /* This seems to be fairly benign, so don't bother logging it */
-
-#if 0
-    LOG(LOGS_INFO, LOGF_Util, "Earlier=[%s] Later=[%s]",
-        UTI_TimevalToString(earlier), UTI_TimevalToString(later));
-#endif
-
     /* Assume the required behaviour is to treat it as zero */
     *diff = 0.0;
   }
@@ -214,12 +207,12 @@ static int  pool_ptr = 0;
 char *
 UTI_TimevalToString(struct timeval *tv)
 {
-  char buffer[64], *result;
-  struct tm stm;
-  stm = *gmtime((time_t *) &(tv->tv_sec));
-  strftime(buffer, sizeof(buffer), "%a %x %X", &stm);
+  char *result;
+
   result = NEXT_BUFFER;
-  snprintf(result, BUFFER_LENGTH, "%s.%06ld", buffer, (unsigned long)(tv->tv_usec));
+  /* TODO: time_t may be wider than long, switch to int64_t before 2038 */
+  snprintf(result, BUFFER_LENGTH, "%ld.%06lu",
+      (long)tv->tv_sec, (unsigned long)tv->tv_usec);
   return result;
 }
 
@@ -647,7 +640,7 @@ UTI_FloatHostToNetwork(double x)
 
 /* ================================================== */
 
-void
+int
 UTI_FdSetCloexec(int fd)
 {
   int flags;
@@ -655,8 +648,10 @@ UTI_FdSetCloexec(int fd)
   flags = fcntl(fd, F_GETFD);
   if (flags != -1) {
     flags |= FD_CLOEXEC;
-    fcntl(fd, F_SETFD, flags);
+    return !fcntl(fd, F_SETFD, flags);
   }
+
+  return 0;
 }
 
 /* ================================================== */

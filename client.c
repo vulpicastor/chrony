@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009-2013
+ * Copyright (C) Miroslav Lichvar  2009-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -65,6 +65,8 @@ static socklen_t his_addr_len;
 static int on_terminal = 0;
 
 static int no_dns = 0;
+
+static int recv_errqueue = 0;
 
 /* ================================================== */
 /* Ought to extract some code from util.c to make
@@ -139,6 +141,7 @@ static void
 open_io(const char *hostname, int port)
 {
   IPAddr ip;
+  int on_off = 1;
 
   /* Note, this call could block for a while */
   if (DNS_Name2IPAddress(hostname, &ip) != DNS_Success) {
@@ -176,6 +179,22 @@ open_io(const char *hostname, int port)
     perror("Can't create socket");
     exit(1);
   }
+
+  /* Enable extended error reporting (e.g. ECONNREFUSED on ICMP unreachable) */
+#ifdef IP_RECVERR
+  if (ip.family == IPADDR_INET4 &&
+      !setsockopt(sock_fd, IPPROTO_IP, IP_RECVERR, &on_off, sizeof(on_off))) {
+    recv_errqueue = 1;
+  }
+#endif
+#ifdef HAVE_IPV6
+#ifdef IPV6_RECVERR
+  if (ip.family == IPADDR_INET6 &&
+      !setsockopt(sock_fd, IPPROTO_IPV6, IPV6_RECVERR, &on_off, sizeof(on_off))) {
+    recv_errqueue = 1;
+  }
+#endif
+#endif
 }
 
 /* ================================================== */
@@ -613,9 +632,7 @@ process_cmd_local(CMD_Request *msg, const char *line)
 
   p = line;
   
-  if (!*p) {
-    return 0;
-  } else if (!strcmp(p, "off")) {
+  if (!strcmp(p, "off")) {
     msg->data.local.on_off = htonl(0);
     msg->data.local.stratum = htonl(0);
   } else if (sscanf(p, "stratum%d", &stratum) == 1) {
@@ -639,15 +656,14 @@ process_cmd_manual(CMD_Request *msg, const char *line)
 
   p = line;
 
-  if (!*p) {
-    return 0;
-  } else if (!strcmp(p, "off")) {
+  if (!strcmp(p, "off")) {
     msg->data.manual.option = htonl(0);
   } else if (!strcmp(p, "on")) {
     msg->data.manual.option = htonl(1);
   } else if (!strcmp(p, "reset")) {
     msg->data.manual.option = htonl(2);
   } else {
+    fprintf(stderr, "Invalid syntax for manual command\n");
     return 0;
   }
   msg->command = htons(REQ_MANUAL);
@@ -1368,6 +1384,15 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
         /* If we get connrefused here, it suggests the sendto is
            going to a dead port - but only if the daemon machine is
            running Linux (Solaris doesn't return anything) */
+
+#ifdef IP_RECVERR
+        /* Fetch the message from the error queue */
+        if (recv_errqueue &&
+            recvfrom(sock_fd, (void *)reply, sizeof(CMD_Reply), MSG_ERRQUEUE,
+                     &where_from.u, &where_from_len) < 0)
+          ;
+#endif
+
         n_attempts++;
         if (n_attempts > max_retries) {
           return 0;
@@ -1375,7 +1400,11 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
       } else {
         
         read_length = recvfrom_status;
-        expected_length = PKL_ReplyLength(reply);
+        if (read_length >= offsetof(CMD_Reply, data)) {
+          expected_length = PKL_ReplyLength(reply);
+        } else {
+          expected_length = 0;
+        }
 
         bad_length = (read_length < expected_length ||
                       expected_length < offsetof(CMD_Reply, data));
@@ -1436,10 +1465,9 @@ submit_request(CMD_Request *request, CMD_Reply *reply, int *reply_auth_ok)
 
         /* Good packet received, print out results */
 #if 0
-        printf("Reply cmd=%d reply=%d stat=%d num=%d tot=%d seq=%d utok=%08lx tok=%d\n",
+        printf("Reply cmd=%d reply=%d stat=%d seq=%d utok=%08lx tok=%d\n",
                ntohs(reply->command), ntohs(reply->reply),
-               ntohs(reply->status), ntohs(reply->number),
-               ntohs(reply->total),
+               ntohs(reply->status),
                ntohl(reply->sequence),
                ntohl(reply->utoken),
                ntohl(reply->token));
@@ -1669,6 +1697,18 @@ print_freq_ppm(double f)
 
 /* ================================================== */
 
+static void
+print_signed_freq_ppm(double f)
+{
+  if (fabs(f) < 99999.5) {
+    printf("%+10.3f", f);
+  } else {
+    printf("%+10.0f", f);
+  }
+}
+
+/* ================================================== */
+
 static int
 check_for_verbose_flag(char *line)
 {
@@ -1693,8 +1733,8 @@ process_cmd_sources(char *line)
   double orig_latest_meas, latest_meas, latest_meas_err;
   IPAddr ip_addr;
   uint32_t latest_meas_ago;
-  uint16_t poll, stratum;
-  uint16_t state, mode, flags, reachability;
+  int16_t poll;
+  uint16_t stratum, state, mode, flags, reachability;
   char hostname_buf[50];
 
   /* Check whether to output verbose headers */
@@ -1863,7 +1903,7 @@ process_cmd_sourcestats(char *line)
           printf("%-25s %3lu %3lu  ", hostname_buf, n_samples, n_runs);
           print_seconds(span_seconds);
           printf(" ");
-          print_freq_ppm(resid_freq_ppm);
+          print_signed_freq_ppm(resid_freq_ppm);
           printf(" ");
           print_freq_ppm(skew_ppm);
           printf("  ");
@@ -1952,7 +1992,7 @@ process_cmd_tracking(char *line)
     rms_offset = UTI_FloatNetworkToHost(reply.data.tracking.rms_offset);
     printf("System time     : %.9f seconds %s of NTP time\n", fabs(correction),
            (correction > 0.0) ? "slow" : "fast");
-    printf("Last offset     : %.9f seconds\n", last_offset);
+    printf("Last offset     : %+.9f seconds\n", last_offset);
     printf("RMS offset      : %.9f seconds\n", rms_offset);
     freq_ppm = UTI_FloatNetworkToHost(reply.data.tracking.freq_ppm);
     resid_freq_ppm = UTI_FloatNetworkToHost(reply.data.tracking.resid_freq_ppm);
@@ -1961,7 +2001,7 @@ process_cmd_tracking(char *line)
     root_dispersion = UTI_FloatNetworkToHost(reply.data.tracking.root_dispersion);
     last_update_interval = UTI_FloatNetworkToHost(reply.data.tracking.last_update_interval);
     printf("Frequency       : %.3f ppm %s\n", fabs(freq_ppm), (freq_ppm < 0.0) ? "slow" : "fast"); 
-    printf("Residual freq   : %.3f ppm\n", resid_freq_ppm);
+    printf("Residual freq   : %+.3f ppm\n", resid_freq_ppm);
     printf("Skew            : %.3f ppm\n", skew_ppm);
     printf("Root delay      : %.6f seconds\n", root_delay);
     printf("Root dispersion : %.6f seconds\n", root_dispersion);
@@ -2601,7 +2641,7 @@ authenticate_from_config(const char *filename)
 
   in = fopen(keyfile, "r");
   if (!in) {
-    fprintf(stderr, "Could not open keyfile %s\n", filename);
+    fprintf(stderr, "Could not open keyfile %s\n", keyfile);
     return 0;
   }
 
@@ -2675,7 +2715,7 @@ static void
 display_gpl(void)
 {
     printf("chrony version %s\n"
-           "Copyright (C) 1997-2003, 2007, 2009-2013 Richard P. Curnow and others\n"
+           "Copyright (C) 1997-2003, 2007, 2009-2014 Richard P. Curnow and others\n"
            "chrony comes with ABSOLUTELY NO WARRANTY.  This is free software, and\n"
            "you are welcome to redistribute it under certain conditions.  See the\n"
            "GNU General Public License version 2 for details.\n\n",
@@ -2689,9 +2729,9 @@ main(int argc, char **argv)
 {
   char *line;
   const char *progname = argv[0];
-  const char *hostname = "localhost";
+  const char *hostname = NULL;
   const char *conf_file = DEFAULT_CONF_FILE;
-  int quit = 0, ret = 1, multi = 0, auto_auth = 0;
+  int quit = 0, ret = 1, multi = 0, auto_auth = 0, family = IPADDR_UNSPEC;
   int port = DEFAULT_CANDM_PORT;
 
   /* Parse command line options */
@@ -2718,11 +2758,9 @@ main(int argc, char **argv)
     } else if (!strcmp(*argv, "-n")) {
       no_dns = 1;
     } else if (!strcmp(*argv, "-4")) {
-      DNS_SetAddressFamily(IPADDR_INET4);
-      hostname = "127.0.0.1";
+      family = IPADDR_INET4;
     } else if (!strcmp(*argv, "-6")) {
-      DNS_SetAddressFamily(IPADDR_INET6);
-      hostname = "::1";
+      family = IPADDR_INET6;
     } else if (!strcmp("-v", *argv) || !strcmp("--version",*argv)) {
       printf("chronyc (chrony) version %s\n", CHRONY_VERSION);
       exit(0);
@@ -2749,6 +2787,15 @@ main(int argc, char **argv)
     return 1;
   }
   
+  DNS_SetAddressFamily(family);
+
+  if (!hostname) {
+    hostname = family == IPADDR_INET6 ? "::1" : "127.0.0.1";
+#ifdef FEAT_ASYNCDNS
+    initial_timeout /= 10;
+#endif
+  }
+
   open_io(hostname, port);
 
   if (auto_auth) {

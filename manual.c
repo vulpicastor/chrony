@@ -59,13 +59,6 @@ typedef struct {
 static Sample samples[16];
 static int n_samples;
 
-static int replace_margin;
-static int error;
-
-/* Eventually these constants need to be user-defined in conf file */
-#define REPLACE_MARGIN 300
-#define ERROR_MARGIN 0.2
-
 /* ================================================== */
 
 static void
@@ -73,7 +66,7 @@ slew_samples(struct timeval *raw,
              struct timeval *cooked, 
              double dfreq,
              double doffset,
-             int is_step_change,
+             LCL_ChangeType change_type,
              void *not_used);
 
 /* ================================================== */
@@ -88,9 +81,6 @@ MNL_Initialise(void)
   }
 
   n_samples = 0;
-
-  replace_margin = REPLACE_MARGIN;
-  error = ERROR_MARGIN;
 
   LCL_AddParameterChangeHandler(slew_samples, NULL);
 }
@@ -226,11 +216,16 @@ slew_samples(struct timeval *raw,
              struct timeval *cooked, 
              double dfreq,
              double doffset,
-             int is_step_change,
+             LCL_ChangeType change_type,
              void *not_used)
 {
   double delta_time;
   int i;
+
+  if (change_type == LCL_ChangeUnknownStep) {
+    MNL_Reset();
+  }
+
   for (i=0; i<n_samples; i++) {
     UTI_AdjustTimeval(&samples[i].when, cooked, &samples[i].when, &delta_time,
         dfreq, doffset);
