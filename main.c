@@ -4,7 +4,7 @@
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
  * Copyright (C) John G. Hasler  2009
- * Copyright (C) Miroslav Lichvar  2012
+ * Copyright (C) Miroslav Lichvar  2012-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -44,7 +44,6 @@
 #include "conf.h"
 #include "cmdmon.h"
 #include "keys.h"
-#include "acquire.h"
 #include "manual.h"
 #include "rtc.h"
 #include "refclock.h"
@@ -60,9 +59,11 @@
 
 static int initialised = 0;
 
-/* ================================================== */
+static int exit_status = 0;
 
 static int reload = 0;
+
+static REF_Mode ref_mode = REF_ModeNormal;
 
 /* ================================================== */
 
@@ -79,7 +80,7 @@ delete_pidfile(void)
 void
 MAI_CleanupAndExit(void)
 {
-  if (!initialised) exit(0);
+  if (!initialised) exit(exit_status);
   
   if (CNF_GetDumpOnExit()) {
     SRC_DumpSources();
@@ -87,7 +88,6 @@ MAI_CleanupAndExit(void)
 
   TMC_Finalise();
   MNL_Finalise();
-  ACQ_Finalise();
   CLG_Finalise();
   NSR_Finalise();
   NCR_Finalise();
@@ -108,7 +108,7 @@ MAI_CleanupAndExit(void)
   
   LOG_Finalise();
 
-  exit(0);
+  exit(exit_status);
 }
 
 /* ================================================== */
@@ -123,13 +123,10 @@ signal_cleanup(int x)
 /* ================================================== */
 
 static void
-post_acquire_hook(void *anything)
+ntp_source_resolving_end(void)
 {
-  /* Close the pipe to the foreground process so it can exit */
-  LOG_CloseParentFd();
+  NSR_SetSourceResolvingEndHandler(NULL);
 
-  CNF_AddSources();
-  CNF_AddBroadcasts();
   if (reload) {
     /* Note, we want reload to come well after the initialisation from
        the real time clock - this gives us a fighting chance that the
@@ -137,10 +134,62 @@ post_acquire_hook(void *anything)
        semblence of validity about it. */
     SRC_ReloadSources();
   }
-  CNF_SetupAccessRestrictions();
 
   RTC_StartMeasurements();
   RCL_StartRefclocks();
+  NSR_StartSources();
+  NSR_AutoStartSources();
+
+  /* Special modes can end only when sources update their reachability.
+     Give up immediatelly if there are no active sources. */
+  if (ref_mode != REF_ModeNormal && !SRC_ActiveSources()) {
+    REF_SetUnsynchronised();
+  }
+}
+
+/* ================================================== */
+
+static void
+post_init_ntp_hook(void *anything)
+{
+  if (ref_mode == REF_ModeInitStepSlew) {
+    /* Remove the initstepslew sources and set normal mode */
+    NSR_RemoveAllSources();
+    ref_mode = REF_ModeNormal;
+    REF_SetMode(ref_mode);
+  }
+
+  /* Close the pipe to the foreground process so it can exit */
+  LOG_CloseParentFd();
+
+  CNF_AddSources();
+  CNF_AddBroadcasts();
+
+  NSR_SetSourceResolvingEndHandler(ntp_source_resolving_end);
+  NSR_ResolveSources();
+}
+
+/* ================================================== */
+
+static void
+reference_mode_end(int result)
+{
+  switch (ref_mode) {
+    case REF_ModeNormal:
+    case REF_ModeUpdateOnce:
+    case REF_ModePrintOnce:
+      exit_status = !result;
+      SCH_QuitProgram();
+      break;
+    case REF_ModeInitStepSlew:
+      /* Switch to the normal mode, the delay is used to prevent polling
+         interval shorter than the burst interval if some configured servers
+         were used also for initstepslew */
+      SCH_AddTimeoutByDelay(2.0, post_init_ntp_hook, NULL);
+      break;
+    default:
+      assert(0);
+  }
 }
 
 /* ================================================== */
@@ -148,7 +197,14 @@ post_acquire_hook(void *anything)
 static void
 post_init_rtc_hook(void *anything)
 {
-  CNF_ProcessInitStepSlew(post_acquire_hook, NULL);
+  if (CNF_GetInitSources() > 0) {
+    CNF_AddInitSources();
+    NSR_StartSources();
+    assert(REF_GetMode() != REF_ModeNormal);
+    /* Wait for mode end notification */
+  } else {
+    (post_init_ntp_hook)(NULL);
+  }
 }
 
 /* ================================================== */
@@ -200,7 +256,7 @@ write_lockfile(void)
 
   out = fopen(pidfile, "w");
   if (!out) {
-    LOG(LOGS_ERR, LOGF_Main, "could not open lockfile %s for writing", pidfile);
+    LOG_FATAL(LOGF_Main, "could not open lockfile %s for writing", pidfile);
   } else {
     fprintf(out, "%d\n", getpid());
     fclose(out);
@@ -222,14 +278,14 @@ go_daemon(void)
   /* Create pipe which will the daemon use to notify the grandparent
      when it's initialised or send an error message */
   if (pipe(pipefd)) {
-    LOG(LOGS_ERR, LOGF_Logging, "Could not detach, pipe failed : %s", strerror(errno));
+    LOG_FATAL(LOGF_Logging, "Could not detach, pipe failed : %s", strerror(errno));
   }
 
   /* Does this preserve existing signal handlers? */
   pid = fork();
 
   if (pid < 0) {
-    LOG(LOGS_ERR, LOGF_Logging, "Could not detach, fork failed : %s", strerror(errno));
+    LOG_FATAL(LOGF_Logging, "Could not detach, fork failed : %s", strerror(errno));
   } else if (pid > 0) {
     /* In the 'grandparent' */
     char message[1024];
@@ -254,7 +310,7 @@ go_daemon(void)
     pid = fork();
 
     if (pid < 0) {
-      LOG(LOGS_ERR, LOGF_Logging, "Could not detach, fork failed : %s", strerror(errno));
+      LOG_FATAL(LOGF_Logging, "Could not detach, fork failed : %s", strerror(errno));
     } else if (pid > 0) {
       exit(0); /* In the 'parent' */
     } else {
@@ -262,7 +318,7 @@ go_daemon(void)
 
       /* Change current directory to / */
       if (chdir("/") < 0) {
-        LOG(LOGS_ERR, LOGF_Logging, "Could not chdir to / : %s", strerror(errno));
+        LOG_FATAL(LOGF_Logging, "Could not chdir to / : %s", strerror(errno));
       }
 
       /* Don't keep stdin/out/err from before. But don't close
@@ -290,6 +346,8 @@ int main
   int do_init_rtc = 0, restarted = 0;
   int other_pid;
   int lock_memory = 0, sched_priority = 0;
+  int system_log = 1;
+  int config_args = 0;
 
   LOG_Initialise();
 
@@ -326,14 +384,27 @@ int main
     } else if (!strcmp("-n", *argv)) {
       nofork = 1;
     } else if (!strcmp("-d", *argv)) {
-      debug = 1;
+      debug++;
       nofork = 1;
+      system_log = 0;
+    } else if (!strcmp("-q", *argv)) {
+      ref_mode = REF_ModeUpdateOnce;
+      nofork = 1;
+      system_log = 0;
+    } else if (!strcmp("-Q", *argv)) {
+      ref_mode = REF_ModePrintOnce;
+      nofork = 1;
+      system_log = 0;
     } else if (!strcmp("-4", *argv)) {
       address_family = IPADDR_INET4;
     } else if (!strcmp("-6", *argv)) {
       address_family = IPADDR_INET6;
-    } else {
+    } else if (*argv[0] == '-') {
       LOG_FATAL(LOGF_Main, "Unrecognized command line option [%s]", *argv);
+    } else {
+      /* Process remaining arguments and configuration lines */
+      config_args = argc;
+      break;
     }
   }
 
@@ -348,16 +419,26 @@ int main
     go_daemon();
   }
 
-  if (!debug) {
+  if (system_log) {
     LOG_OpenSystemLog();
   }
+  
+  LOG_SetDebugLevel(debug);
   
   LOG(LOGS_INFO, LOGF_Main, "chronyd version %s starting", CHRONY_VERSION);
 
   DNS_SetAddressFamily(address_family);
 
   CNF_SetRestarted(restarted);
-  CNF_ReadFile(conf_file);
+
+  /* Parse the config file or the remaining command line arguments */
+  if (!config_args) {
+    CNF_ReadFile(conf_file);
+  } else {
+    do {
+      CNF_ParseLine(NULL, config_args - argc + 1, *argv);
+    } while (++argv, --argc);
+  }
 
   /* Check whether another chronyd may already be running.  Do this after
    * forking, so that message logging goes to the right place (i.e. syslog), in
@@ -400,7 +481,7 @@ int main
   if (!user) {
     user = CNF_GetUser();
   }
-  if (user) {
+  if (user && strcmp(user, "root")) {
     SYS_DropRoot(user);
   }
 
@@ -412,12 +493,20 @@ int main
   NCR_Initialise();
   NSR_Initialise();
   CLG_Initialise();
-  ACQ_Initialise();
   MNL_Initialise();
   TMC_Initialise();
 
   /* From now on, it is safe to do finalisation on exit */
   initialised = 1;
+
+  CNF_SetupAccessRestrictions();
+
+  if (ref_mode == REF_ModeNormal && CNF_GetInitSources() > 0) {
+    ref_mode = REF_ModeInitStepSlew;
+  }
+
+  REF_SetModeEndHandler(reference_mode_end);
+  REF_SetMode(ref_mode);
 
   if (do_init_rtc) {
     RTC_TimeInit(post_init_rtc_hook, NULL);

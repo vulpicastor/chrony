@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Miroslav Lichvar  2011
+ * Copyright (C) Miroslav Lichvar  2011, 2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -35,6 +35,9 @@
 #include "sched.h"
 #include "tempcomp.h"
 
+/* Sanity limit (in ppm) */
+#define MAX_COMP 10.0
+
 static SCH_TimeoutID timeout_id;
 
 static LOG_FileID logfileid;
@@ -54,8 +57,7 @@ read_timeout(void *arg)
   if (f && fscanf(f, "%lf", &temp) == 1) {
     comp = k0 + (temp - T0) * k1 + (temp - T0) * (temp - T0) * k2;
 
-    /* Don't allow corrections above 10 ppm */
-    if (fabs(comp) < 10.0) {
+    if (fabs(comp) <= MAX_COMP) {
       comp = LCL_SetTempComp(comp);
 
       if (logfileid != -1) {
@@ -65,7 +67,14 @@ read_timeout(void *arg)
         LOG_FileWrite(logfileid, "%s %11.4e %11.4e",
             UTI_TimeToLogForm(now.tv_sec), temp, comp);
       }
+    } else {
+      LOG(LOGS_WARN, LOGF_TempComp,
+          "Temperature compensation of %.3f ppm exceeds sanity limit of %.1f",
+          comp, MAX_COMP);
     }
+  } else {
+    LOG(LOGS_WARN, LOGF_TempComp, "Could not read temperature from %s",
+        filename);
   }
 
   if (f)

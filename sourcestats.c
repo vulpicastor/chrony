@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011-2012
+ * Copyright (C) Miroslav Lichvar  2011-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -188,6 +188,26 @@ SST_CreateInstance(uint32_t refid, IPAddr *addr)
   inst = MallocNew(struct SST_Stats_Record);
   inst->refid = refid;
   inst->ip_addr = addr;
+
+  SST_ResetInstance(inst);
+
+  return inst;
+}
+
+/* ================================================== */
+/* This function deletes an instance of the statistics handler. */
+
+void
+SST_DeleteInstance(SST_Stats inst)
+{
+  Free(inst);
+}
+
+/* ================================================== */
+
+void
+SST_ResetInstance(SST_Stats inst)
+{
   inst->n_samples = 0;
   inst->runs_samples = 0;
   inst->last_sample = 0;
@@ -203,16 +223,6 @@ SST_CreateInstance(uint32_t refid, IPAddr *addr)
   inst->offset_time.tv_usec = 0;
   inst->variance = 16.0;
   inst->nruns = 0;
-  return inst;
-}
-
-/* ================================================== */
-/* This function deletes an instance of the statistics handler. */
-
-void
-SST_DeleteInstance(SST_Stats inst)
-{
-  Free(inst);
 }
 
 /* ================================================== */
@@ -258,7 +268,7 @@ SST_AccumulateSample(SST_Stats inst, struct timeval *sample_time,
       UTI_CompareTimevals(&inst->sample_times[inst->last_sample], sample_time) >= 0) {
     LOG(LOGS_WARN, LOGF_SourceStats, "Out of order sample detected, discarding history for %s",
         inst->ip_addr ? UTI_IPToString(inst->ip_addr) : UTI_RefidToString(inst->refid));
-    prune_register(inst, inst->n_samples);
+    SST_ResetInstance(inst);
   }
 
   n = inst->last_sample = (inst->last_sample + 1) %
@@ -353,10 +363,6 @@ find_best_sample_index(SST_Stats inst, double *times_back)
 
   assert(best_index >= 0);
   inst->best_single_sample = best_index;
-
-#if 0
-  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d best_index=%d", n, best_index);
-#endif
 }
 
 /* ================================================== */
@@ -490,9 +496,6 @@ SST_DoNewRegression(SST_Stats inst)
     times_back_start = inst->runs_samples + best_start;
     prune_register(inst, best_start);
   } else {
-#if 0
-    LOG(LOGS_INFO, LOGF_SourceStats, "too few points (%d) for regression", inst->n_samples);
-#endif
     inst->estimated_frequency = 0.0;
     inst->skew = WORST_CASE_FREQ_BOUND;
     times_back_start = 0;
@@ -569,10 +572,8 @@ SST_GetSelectionData(SST_Stats inst, struct timeval *now,
 
   *select_ok = inst->regression_ok;
 
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d off=%f dist=%f var=%f selok=%d",
+  DEBUG_LOG(LOGF_SourceStats, "n=%d off=%f dist=%f var=%f selok=%d",
       inst->n_samples, offset, *root_distance, *variance, *select_ok);
-#endif
 }
 
 /* ================================================== */
@@ -585,6 +586,8 @@ SST_GetTrackingData(SST_Stats inst, struct timeval *ref_time,
 {
   int i, j;
   double elapsed_sample;
+
+  assert(inst->n_samples > 0);
 
   i = get_runsbuf_index(inst, inst->best_single_sample);
   j = get_buf_index(inst, inst->best_single_sample);
@@ -599,10 +602,8 @@ SST_GetTrackingData(SST_Stats inst, struct timeval *ref_time,
   UTI_DiffTimevalsToDouble(&elapsed_sample, &inst->offset_time, &inst->sample_times[i]);
   *root_dispersion = inst->root_dispersions[j] + inst->skew * elapsed_sample;
 
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_SourceStats, "n=%d freq=%f (%.3fppm) skew=%f (%.3fppm) avoff=%f offsd=%f disp=%f",
+  DEBUG_LOG(LOGF_SourceStats, "n=%d freq=%f (%.3fppm) skew=%f (%.3fppm) avoff=%f offsd=%f disp=%f",
       inst->n_samples, *frequency, 1.0e6* *frequency, *skew, 1.0e6* *skew, *average_offset, *offset_sd, *root_dispersion);
-#endif
 
 }
 
@@ -626,13 +627,10 @@ SST_SlewSamples(SST_Stats inst, struct timeval *when, double dfreq, double doffs
     UTI_AdjustTimeval(sample, when, sample, &delta_time, dfreq, doffset);
     prev_offset = inst->offsets[i];
     inst->offsets[i] += delta_time;
-#ifdef TRACEON
-    LOG(LOGS_INFO, LOGF_SourceStats, "i=%d old_st=[%s] new_st=[%s] old_off=%f new_off=%f",
+
+    DEBUG_LOG(LOGF_SourceStats, "i=%d old_st=[%s] new_st=[%s] old_off=%f new_off=%f",
         i, UTI_TimevalToString(&prev), UTI_TimevalToString(sample),
         prev_offset, inst->offsets[i]);
-#else
-    (void)prev_offset;
-#endif
   }
 
   /* Do a half-baked update to the regression estimates */
@@ -644,14 +642,10 @@ SST_SlewSamples(SST_Stats inst, struct timeval *when, double dfreq, double doffs
   inst->estimated_offset += delta_time;
   inst->estimated_frequency -= dfreq;
 
-#ifdef TRACEON
-  LOG(LOGS_INFO, LOGF_SourceStats, "old_off_time=[%s] new=[%s] old_off=%f new_off=%f old_freq=%.3fppm new_freq=%.3fppm",
+  DEBUG_LOG(LOGF_SourceStats, "old_off_time=[%s] new=[%s] old_off=%f new_off=%f old_freq=%.3fppm new_freq=%.3fppm",
       UTI_TimevalToString(&prev), UTI_TimevalToString(&(inst->offset_time)),
       prev_offset, inst->estimated_offset,
       1.0e6*prev_freq, 1.0e6*inst->estimated_frequency);
-#else
-  (void)prev; (void)prev_freq;
-#endif
 }
 
 /* ================================================== */
@@ -733,9 +727,8 @@ SST_IsGoodSample(SST_Stats inst, double offset, double delay,
   if (fabs(offset) - delay_increase > allowed_increase)
     return 1;
 
-#if 0
-  LOG(LOGS_INFO, LOGF_SourceStats, "bad sample: offset=%f delay=%f incr_delay=%f allowed=%f", offset, delay, allowed_increase, delay_increase);
-#endif
+  DEBUG_LOG(LOGF_SourceStats, "Bad sample: offset=%f delay=%f incr_delay=%f allowed=%f",
+      offset, delay, allowed_increase, delay_increase);
 
   return 0;
 }
@@ -781,8 +774,11 @@ SST_LoadFromFile(SST_Stats inst, FILE *in)
   unsigned long sec, usec;
   double weight;
 
+  assert(!inst->n_samples);
+
   if (fgets(line, sizeof(line), in) &&
-      (sscanf(line, "%u", &inst->n_samples) == 1) && inst->n_samples <= MAX_SAMPLES) {
+      sscanf(line, "%d", &inst->n_samples) == 1 &&
+      inst->n_samples > 0 && inst->n_samples <= MAX_SAMPLES) {
 
     line_number = 2;
 

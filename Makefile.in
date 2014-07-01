@@ -42,10 +42,10 @@ OBJS = util.o sched.o regress.o local.o \
 	sys.o main.o ntp_io.o ntp_core.o ntp_sources.o \
 	sources.o sourcestats.o reference.o \
 	logging.o conf.o cmdmon.o keys.o \
-	nameserv.o acquire.o manual.o addrfilt.o \
+	nameserv.o nameserv_async.o manual.o addrfilt.o \
 	cmdparse.o mkdirpp.o rtc.o pktlength.o clientlog.o \
-	broadcast.o refclock.o refclock_shm.o refclock_sock.o \
-	refclock_pps.o tempcomp.o $(HASH_OBJ)
+	broadcast.o refclock.o refclock_phc.o refclock_pps.o \
+	refclock_shm.o refclock_sock.o tempcomp.o $(HASH_OBJ)
 
 EXTRA_OBJS=@EXTRA_OBJECTS@
 
@@ -66,10 +66,10 @@ EXTRA_CLI_LIBS=@EXTRA_CLI_LIBS@
 all : chronyd chronyc
 
 chronyd : $(OBJS) $(EXTRA_OBJS)
-	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) @HASH_LINK@ $(LIBS) $(EXTRA_LIBS)
+	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_LIBS)
 
 chronyc : $(CLI_OBJS)
-	$(CC) $(CFLAGS) -o chronyc $(CLI_OBJS) $(LDFLAGS) @READLINE_LINK@ @HASH_LINK@ $(LIBS) $(EXTRA_CLI_LIBS)
+	$(CC) $(CFLAGS) -o chronyc $(CLI_OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_CLI_LIBS)
 
 client.o : client.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) @READLINE_COMPILE@ -c $<
@@ -92,7 +92,7 @@ getdate :
 # For install, don't use the install command, because its switches
 # seem to vary between systems.
 
-install: chronyd chronyc
+install: chronyd chronyc chrony.txt
 	[ -d $(DESTDIR)$(SYSCONFDIR) ] || mkdir -p $(DESTDIR)$(SYSCONFDIR)
 	[ -d $(DESTDIR)$(SBINDIR) ] || mkdir -p $(DESTDIR)$(SBINDIR)
 	[ -d $(DESTDIR)$(BINDIR) ] || mkdir -p $(DESTDIR)$(BINDIR)
@@ -129,6 +129,9 @@ install: chronyd chronyc
 %.s : %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -S $<
 
+check : chronyd chronyc
+	cd test/simulation && ./run
+
 install-docs : docs
 	[ -d $(DESTDIR)$(DOCDIR) ] || mkdir -p $(DESTDIR)$(DOCDIR)
 	cp chrony.txt $(DESTDIR)$(DOCDIR)/chrony.txt
@@ -150,10 +153,6 @@ chrony.html : chrony.texi
 
 chrony.info : chrony.texi
 	makeinfo chrony.texi
-
-# This is only relevant if you're maintaining the website!
-faq.php : faq.txt faqgen.pl
-	perl faqgen.pl < faq.txt > faq.php
 
 .deps:
 	@mkdir .deps

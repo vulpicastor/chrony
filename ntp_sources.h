@@ -3,6 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -54,14 +55,30 @@ extern NSR_Status NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type
    until it succeeds or fails with a non-temporary error. */
 extern void NSR_AddUnresolvedSource(char *name, int port, NTP_Source_Type type, SourceParameters *params);
 
-/* Procedure to try resolve unresolved sources immediately. */
+/* Function type for handlers to be called back when an attempt
+ * (possibly unsuccessful) to resolve unresolved sources ends */
+typedef void (*NSR_SourceResolvingEndHandler)(void);
+
+/* Set the handler, or NULL to disable the notification */
+extern void NSR_SetSourceResolvingEndHandler(NSR_SourceResolvingEndHandler handler);
+
+/* Procedure to start resolving unresolved sources */
 extern void NSR_ResolveSources(void);
+
+/* Procedure to start all sources */
+extern void NSR_StartSources(void);
+
+/* Start new sources automatically */
+extern void NSR_AutoStartSources(void);
 
 /* Procedure to remove a source */
 extern NSR_Status NSR_RemoveSource(NTP_Remote_Address *remote_addr);
 
+/* Procedure to remove all sources */
+extern void NSR_RemoveAllSources(void);
+
 /* This routine is called by ntp_io when a new packet arrives off the network */
-extern void NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, int length);
+extern void NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr, int length);
 
 /* Initialisation function */
 extern void NSR_Initialise(void);

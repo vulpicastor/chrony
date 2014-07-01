@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -21,25 +21,22 @@
 
   =======================================================================
 
-  Header file for acquisition module
+  Header file for generic driver
   */
 
-#ifndef GOT_ACQUIRE_H
-#define GOT_ACQUIRE_H
+#ifndef GOT_SYS_GENERIC_H
+#define GOT_SYS_GENERIC_H
 
-#include "addressing.h"
+#include "localp.h"
 
-typedef struct ACQ_SourceRecord *ACQ_Source;
+/* Register a completed driver that implements offset functions on top of
+   provided frequency functions */
+extern void SYS_Generic_CompleteFreqDriver(double max_set_freq_ppm, double max_set_freq_delay,
+                                           lcl_ReadFrequencyDriver sys_read_freq,
+                                           lcl_SetFrequencyDriver sys_set_freq,
+                                           lcl_ApplyStepOffsetDriver sys_apply_step_offset,
+                                           lcl_SetLeapDriver sys_set_leap);
 
-extern void ACQ_Initialise(void);
+extern void SYS_Generic_Finalise(void);
 
-extern void ACQ_Finalise(void);
-
-extern void ACQ_StartAcquisition(int n, IPAddr *ip_addrs, double init_slew_threshold,
-                                 void (*after_hook)(void *), void *anything);
-
-extern void ACQ_AccumulateSample(ACQ_Source acq_source, double offset, double root_distance);
-
-extern void ACQ_MissedSample(ACQ_Source acq_source);
-
-#endif /* GOT_ACQUIRE_H */
+#endif  /* GOT_SYS_GENERIC_H */

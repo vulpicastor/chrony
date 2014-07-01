@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009-2012
+ * Copyright (C) Miroslav Lichvar  2009-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -171,21 +171,18 @@ static ADF_AuthTable access_auth_table;
 
 /* ================================================== */
 /* Forward prototypes */
-static int prepare_socket(int family);
 static void read_from_cmd_socket(void *anything);
 
 /* ================================================== */
 
 static int
-prepare_socket(int family)
+prepare_socket(int family, int port_number)
 {
-  int port_number, sock_fd;
+  int sock_fd;
   socklen_t my_addr_len;
   union sockaddr_in46 my_addr;
   IPAddr bind_address;
   int on_off = 1;
-
-  port_number = CNF_GetCommandPort();
 
   sock_fd = socket(family, SOCK_DGRAM, 0);
   if (sock_fd < 0) {
@@ -265,7 +262,7 @@ prepare_socket(int family)
 void
 CAM_Initialise(int family)
 {
-  int i;
+  int i, port_number;
 
   assert(!initialised);
   initialised = 1;
@@ -293,18 +290,20 @@ CAM_Initialise(int family)
   free_replies = NULL;
   kept_replies.next = NULL;
 
-  if (family == IPADDR_UNSPEC || family == IPADDR_INET4)
-    sock_fd4 = prepare_socket(AF_INET);
+  port_number = CNF_GetCommandPort();
+
+  if (port_number && (family == IPADDR_UNSPEC || family == IPADDR_INET4))
+    sock_fd4 = prepare_socket(AF_INET, port_number);
   else
     sock_fd4 = -1;
 #ifdef HAVE_IPV6
-  if (family == IPADDR_UNSPEC || family == IPADDR_INET6)
-    sock_fd6 = prepare_socket(AF_INET6);
+  if (port_number && (family == IPADDR_UNSPEC || family == IPADDR_INET6))
+    sock_fd6 = prepare_socket(AF_INET6, port_number);
   else
     sock_fd6 = -1;
 #endif
 
-  if (sock_fd4 < 0
+  if (port_number && sock_fd4 < 0
 #ifdef HAVE_IPV6
       && sock_fd6 < 0
 #endif
@@ -667,46 +666,6 @@ token_acknowledged(unsigned long token, struct timeval *now)
 
 /* ================================================== */
 
-#if 0
-/* These two routines are not legal if the program is operating as a daemon, since
-   stderr is no longer open */
-
-static void
-print_command_packet(CMD_Request *pkt, int length)
-{
-  unsigned char *x;
-  int i;
-  x = (unsigned char *) pkt;
-  for (i=0; i<length; i++) {
-    fprintf(stderr, "%02x ", x[i]);
-    if (i%16 == 15) {
-      fprintf(stderr, "\n");
-    }
-  }
-  fprintf(stderr, "\n");
-}
-
-/* ================================================== */
-
-static void
-print_reply_packet(CMD_Reply *pkt)
-{
-  unsigned char *x;
-  int i;
-  x = (unsigned char *) pkt;
-  for (i=0; i<sizeof(CMD_Reply); i++) {
-    fprintf(stderr, "%02x ", x[i]);
-    if (i%16 == 15) {
-      fprintf(stderr, "\n");
-    }
-  }
-  fprintf(stderr, "\n");
-}
-
-#endif 
-
-/* ================================================== */
-
 static void
 transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
 {
@@ -734,7 +693,7 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
   status = sendto(sock_fd, (void *) msg, tx_message_length, 0,
                   &where_to->u, addrlen);
 
-  if (status < 0 && !LOG_RateLimited()) {
+  if (status < 0) {
     unsigned short port;
     IPAddr ip;
 
@@ -755,7 +714,7 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
         assert(0);
     }
 
-    LOG(LOGS_WARN, LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&ip), port);
+    DEBUG_LOG(LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&ip), port);
   }
 }
   
@@ -1276,7 +1235,6 @@ handle_add_source(NTP_Source_Type type, CMD_Request *rx_message, CMD_Reply *tx_m
   NSR_Status status;
   
   UTI_IPNetworkToHost(&rx_message->data.ntp_source.ip_addr, &rem_addr.ip_addr);
-  rem_addr.local_ip_addr.family = IPADDR_UNSPEC;
   rem_addr.port = (unsigned short)(ntohl(rx_message->data.ntp_source.port));
   params.minpoll = ntohl(rx_message->data.ntp_source.minpoll);
   params.maxpoll = ntohl(rx_message->data.ntp_source.maxpoll);
@@ -1324,7 +1282,6 @@ handle_del_source(CMD_Request *rx_message, CMD_Reply *tx_message)
   NSR_Status status;
   
   UTI_IPNetworkToHost(&rx_message->data.del_source.ip_addr, &rem_addr.ip_addr);
-  rem_addr.local_ip_addr.family = IPADDR_UNSPEC;
   rem_addr.port = 0;
   
   status = NSR_RemoveSource(&rem_addr);
@@ -1380,8 +1337,8 @@ handle_doffset(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
   long sec, usec;
   double doffset;
-  sec = (long)(ntohl(rx_message->data.doffset.sec));
-  usec = (long)(ntohl(rx_message->data.doffset.usec));
+  sec = (int32_t)ntohl(rx_message->data.doffset.sec);
+  usec = (int32_t)ntohl(rx_message->data.doffset.usec);
   doffset = (double) sec + 1.0e-6 * (double) usec;
   LOG(LOGS_INFO, LOGF_CmdMon, "Accumulated delta offset of %.6f seconds", doffset);
   LCL_AccumulateOffset(doffset, 0.0);
@@ -1591,7 +1548,7 @@ handle_manual_delete(CMD_Request *rx_message, CMD_Reply *tx_message)
 static void
 handle_make_step(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
-  LCL_MakeStep(0.0);
+  LCL_MakeStep();
   tx_message->status = htons(STT_SUCCESS);
 }
 
@@ -1630,20 +1587,6 @@ handle_reselect(CMD_Request *rx_message, CMD_Reply *tx_message)
   SRC_ReselectSource();
   tx_message->status = htons(STT_SUCCESS);
 }
-
-/* ================================================== */
-
-#if 0
-/* ================================================== */
-
-static void
-handle_(CMD_Request *rx_message, CMD_Reply *tx_message)
-{
-  int status;
-}
-
-
-#endif
 
 /* ================================================== */
 /* Read a packet and process it */
@@ -1758,9 +1701,9 @@ read_from_cmd_socket(void *anything)
   tx_message.command = rx_message.command;
   tx_message.sequence = rx_message.sequence;
   tx_message.reply = htons(RPY_NULL);
-  tx_message.number = htons(1);
-  tx_message.total = htons(1);
   tx_message.pad1 = 0;
+  tx_message.pad2 = 0;
+  tx_message.pad3 = 0;
   tx_message.utoken = htonl(utoken);
   /* Set this to a default (invalid) value.  This protects against the
      token field being set to an arbitrary value if we reject the
@@ -1769,10 +1712,7 @@ read_from_cmd_socket(void *anything)
   memset(&tx_message.auth, 0, sizeof(tx_message.auth));
 
   if (rx_message.version != PROTO_VERSION_NUMBER) {
-    tx_message.status = htons(STT_NOHOSTACCESS);
-    if (!LOG_RateLimited()) {
-      LOG(LOGS_WARN, LOGF_CmdMon, "Read command packet with protocol version %d (expected %d) from %s:%hu", rx_message.version, PROTO_VERSION_NUMBER, UTI_IPToString(&remote_ip), remote_port);
-    }
+    DEBUG_LOG(LOGF_CmdMon, "Read command packet with protocol version %d (expected %d) from %s:%hu", rx_message.version, PROTO_VERSION_NUMBER, UTI_IPToString(&remote_ip), remote_port);
 
     CLG_LogCommandAccess(&remote_ip, CLG_CMD_BAD_PKT, cooked_now.tv_sec);
 
@@ -1784,9 +1724,7 @@ read_from_cmd_socket(void *anything)
   }
 
   if (rx_command >= N_REQUEST_TYPES) {
-    if (!LOG_RateLimited()) {
-      LOG(LOGS_WARN, LOGF_CmdMon, "Read command packet with invalid command %d from %s:%hu", rx_command, UTI_IPToString(&remote_ip), remote_port);
-    }
+    DEBUG_LOG(LOGF_CmdMon, "Read command packet with invalid command %d from %s:%hu", rx_command, UTI_IPToString(&remote_ip), remote_port);
 
     CLG_LogCommandAccess(&remote_ip, CLG_CMD_BAD_PKT, cooked_now.tv_sec);
 
@@ -1796,9 +1734,7 @@ read_from_cmd_socket(void *anything)
   }
 
   if (read_length < expected_length) {
-    if (!LOG_RateLimited()) {
-      LOG(LOGS_WARN, LOGF_CmdMon, "Read incorrectly sized command packet from %s:%hu", UTI_IPToString(&remote_ip), remote_port);
-    }
+    DEBUG_LOG(LOGF_CmdMon, "Read incorrectly sized command packet from %s:%hu", UTI_IPToString(&remote_ip), remote_port);
 
     CLG_LogCommandAccess(&remote_ip, CLG_CMD_BAD_PKT, cooked_now.tv_sec);
 
@@ -1881,8 +1817,8 @@ read_from_cmd_socket(void *anything)
       tx_message_length = PKL_ReplyLength(prev_tx_message);
       status = sendto(sock_fd, (void *) prev_tx_message, tx_message_length, 0,
                       &where_from.u, from_length);
-      if (status < 0 && !LOG_RateLimited()) {
-        LOG(LOGS_WARN, LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&remote_ip), remote_port);
+      if (status < 0) {
+        DEBUG_LOG(LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&remote_ip), remote_port);
       }
       return;
     }
@@ -1936,8 +1872,6 @@ read_from_cmd_socket(void *anything)
     /* This should be already handled */
     assert(0);
   } else {
-    allowed = 0;
-
     /* Check level of authority required to issue the command */
     switch(permissions[rx_command]) {
       case PERMIT_AUTH:
@@ -1959,6 +1893,7 @@ read_from_cmd_socket(void *anything)
         break;
       default:
         assert(0);
+        allowed = 0;
     }
 
     if (allowed) {
@@ -2010,8 +1945,8 @@ read_from_cmd_socket(void *anything)
 
         case REQ_LOGON:
           /* If the log-on fails, record the reason why */
-          if (!issue_token && !LOG_RateLimited()) {
-            LOG(LOGS_WARN, LOGF_CmdMon,
+          if (!issue_token) {
+            DEBUG_LOG(LOGF_CmdMon,
                 "Bad command logon from %s port %d (auth_ok=%d valid_ts=%d)",
                 UTI_IPToString(&remote_ip),
                 remote_port,

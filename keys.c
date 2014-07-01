@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2012-2013
+ * Copyright (C) Miroslav Lichvar  2012-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -142,7 +142,7 @@ KEY_Finalise(void)
 /* ================================================== */
 
 static int
-determine_hash_delay(int key_id)
+determine_hash_delay(unsigned long key_id)
 {
   NTP_Packet pkt;
   struct timeval before, after;
@@ -162,12 +162,12 @@ determine_hash_delay(int key_id)
     }
   }
 
-#if 0
-  LOG(LOGS_INFO, LOGF_Keys, "authentication delay for key %lu: %d useconds", key_id, min_usecs);
-#endif
-
   /* Add on a bit extra to allow for copying, conversions etc */
-  return min_usecs + (min_usecs >> 4);
+  min_usecs += min_usecs >> 4;
+
+  DEBUG_LOG(LOGF_Keys, "authentication delay for key %lu: %ld useconds", key_id, min_usecs);
+
+  return min_usecs;
 }
 
 /* ================================================== */
@@ -260,7 +260,7 @@ KEY_Reload(void)
   /* Check for duplicates */
   for (i = 1; i < n_keys; i++) {
     if (keys[i - 1].id == keys[i].id) {
-      LOG(LOGS_WARN, LOGF_Keys, "Detected duplicate key %lu", key_id);
+      LOG(LOGS_WARN, LOGF_Keys, "Detected duplicate key %lu", keys[i].id);
     }
   }
 
@@ -295,13 +295,20 @@ lookup_key(unsigned long id)
 static int
 get_key_pos(unsigned long key_id)
 {
-  if (!cache_valid || key_id != cache_key_id) {
+  int position;
+
+  if (cache_valid && key_id == cache_key_id)
+    return cache_key_pos;
+
+  position = lookup_key(key_id);
+
+  if (position >= 0) {
     cache_valid = 1;
-    cache_key_pos = lookup_key(key_id);
+    cache_key_pos = position;
     cache_key_id = key_id;
   }
 
-  return cache_key_pos;
+  return position;
 }
 
 /* ================================================== */
@@ -321,25 +328,7 @@ KEY_GetCommandKey(void)
 int
 KEY_KeyKnown(unsigned long key_id)
 {
-  int position;
-
-  if (cache_valid && (key_id == cache_key_id)) {
-    return 1;
-  } else {
-
-    position = lookup_key(key_id);
-
-    if (position >= 0) {
-      /* Store key in cache, we will probably be using it in a
-         minute... */
-      cache_valid = 1;
-      cache_key_pos = position;
-      cache_key_id = key_id;
-      return 1;
-    } else {
-      return 0;
-    }
-  }
+  return get_key_pos(key_id) >= 0;
 }
 
 /* ================================================== */

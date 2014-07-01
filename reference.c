@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009-2013
+ * Copyright (C) Miroslav Lichvar  2009-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -67,6 +67,9 @@ static double correction_time_ratio;
 /* Flag indicating that we are initialised */
 static int initialised = 0;
 
+/* Current operating mode */
+static REF_Mode mode;
+
 /* Threshold and update limit for stepping clock */
 static int make_step_limit;
 static double make_step_threshold;
@@ -85,6 +88,9 @@ static double log_change_threshold;
 static int do_mail_change;
 static double mail_change_threshold;
 static char *mail_change_user;
+
+/* Handler for mode ending */
+static REF_ModeEndHandler mode_end_handler = NULL;
 
 /* Filename of the drift file. */
 static char *drift_file=NULL;
@@ -138,11 +144,16 @@ handle_slew(struct timeval *raw,
             struct timeval *cooked,
             double dfreq,
             double doffset,
-            int is_step_change,
+            LCL_ChangeType change_type,
             void *anything)
 {
-  if (is_step_change) {
-    UTI_AddDoubleToTimeval(&last_ref_update, -doffset, &last_ref_update);
+  double delta;
+
+  if (change_type == LCL_ChangeUnknownStep) {
+    last_ref_update.tv_sec = 0;
+    last_ref_update.tv_usec = 0;
+  } else if (last_ref_update.tv_sec) {
+    UTI_AdjustTimeval(&last_ref_update, cooked, &last_ref_update, &delta, dfreq, doffset);
   }
 }
 
@@ -155,6 +166,7 @@ REF_Initialise(void)
   double file_freq_ppm, file_skew_ppm;
   double our_frequency_ppm;
 
+  mode = REF_ModeNormal;
   are_we_synchronised = 0;
   our_leap_status = LEAP_Unsynchronised;
   our_leap_sec = 0;
@@ -266,6 +278,29 @@ REF_Finalise(void)
 
 /* ================================================== */
 
+void REF_SetMode(REF_Mode new_mode)
+{
+  mode = new_mode;
+}
+
+/* ================================================== */
+
+REF_Mode
+REF_GetMode(void)
+{
+  return mode;
+}
+
+/* ================================================== */
+
+void
+REF_SetModeEndHandler(REF_ModeEndHandler handler)
+{
+  mode_end_handler = handler;
+}
+
+/* ================================================== */
+
 static double
 Sqr(double x)
 {
@@ -290,6 +325,7 @@ update_drift_file(double freq_ppm, double skew)
   struct stat buf;
   char *temp_drift_file;
   FILE *out;
+  int r1, r2;
 
   /* Create a temporary file with a '.tmp' extension. */
 
@@ -311,8 +347,9 @@ update_drift_file(double freq_ppm, double skew)
   }
 
   /* Write the frequency and skew parameters in ppm */
-  if ((fprintf(out, "%20.6f %20.6f\n", freq_ppm, 1.0e6 * skew) < 0) |
-      fclose(out)) {
+  r1 = fprintf(out, "%20.6f %20.6f\n", freq_ppm, 1.0e6 * skew);
+  r2 = fclose(out);
+  if (r1 < 0 || r2) {
     Free(temp_drift_file);
     LOG(LOGS_WARN, LOGF_Reference, "Could not write to temporary driftfile %s.tmp",
         drift_file);
@@ -322,10 +359,12 @@ update_drift_file(double freq_ppm, double skew)
   /* Clone the file attributes from the existing file if there is one. */
 
   if (!stat(drift_file,&buf)) {
-    if (chown(temp_drift_file,buf.st_uid,buf.st_gid)) {
-      LOG(LOGS_WARN, LOGF_Reference, "Could not change ownership of temporary driftfile %s.tmp", drift_file);
+    if (chown(temp_drift_file,buf.st_uid,buf.st_gid) ||
+        chmod(temp_drift_file,buf.st_mode & 0777)) {
+      LOG(LOGS_WARN, LOGF_Reference,
+          "Could not change ownership or permissions of temporary driftfile %s.tmp",
+          drift_file);
     }
-    chmod(temp_drift_file,buf.st_mode&0777);
   }
 
   /* Rename the temporary file to the correct location (see rename(2) for details). */
@@ -387,10 +426,8 @@ update_fb_drifts(double freq_ppm, double update_interval)
         (freq_ppm - fb_drifts[i].freq);
     }
 
-#if 0
-    LOG(LOGS_INFO, LOGF_Reference, "Fallback drift %d updated: %f ppm %f seconds",
+    DEBUG_LOG(LOGF_Reference, "Fallback drift %d updated: %f ppm %f seconds",
         i + fb_drift_min, fb_drifts[i].freq, fb_drifts[i].secs);
-#endif
   }
 }
 
@@ -437,19 +474,27 @@ schedule_fb_drift(struct timeval *now)
   if (c > next_fb_drift) {
     LCL_SetAbsoluteFrequency(fb_drifts[c - fb_drift_min].freq);
     next_fb_drift = c;
-#if 0
-    LOG(LOGS_INFO, LOGF_Reference, "Fallback drift %d set", c);
-#endif
+    DEBUG_LOG(LOGF_Reference, "Fallback drift %d set", c);
   }
 
   if (i <= fb_drift_max) {
     next_fb_drift = i;
     UTI_AddDoubleToTimeval(now, secs - unsynchronised, &when);
     fb_drift_timeout_id = SCH_AddTimeout(&when, fb_drift_timeout, NULL);
-#if 0
-    LOG(LOGS_INFO, LOGF_Reference, "Fallback drift %d scheduled", i);
-#endif
+    DEBUG_LOG(LOGF_Reference, "Fallback drift %d scheduled", i);
   }
+}
+
+/* ================================================== */
+
+static void
+end_ref_mode(int result)
+{
+  mode = REF_ModeIgnore;
+
+  /* Dispatch the handler */
+  if (mode_end_handler)
+    (mode_end_handler)(result);
 }
 
 /* ================================================== */
@@ -506,15 +551,15 @@ maybe_log_offset(double offset, time_t now)
 
 /* ================================================== */
 
-static void
-maybe_make_step()
+static int
+is_step_limit_reached(double offset, double offset_correction)
 {
   if (make_step_limit == 0) {
-    return;
+    return 0;
   } else if (make_step_limit > 0) {
     make_step_limit--;
   }
-  LCL_MakeStep(make_step_threshold);
+  return fabs(offset - offset_correction) > make_step_threshold;
 }
 
 /* ================================================== */
@@ -534,14 +579,23 @@ is_offset_ok(double offset)
   if (offset > max_offset) {
     LOG(LOGS_WARN, LOGF_Reference,
         "Adjustment of %.3f seconds exceeds the allowed maximum of %.3f seconds (%s) ",
-        offset, max_offset, !max_offset_ignore ? "exiting" : "ignored");
+        -offset, max_offset, !max_offset_ignore ? "exiting" : "ignored");
     if (!max_offset_ignore)
-      SCH_QuitProgram();
+      end_ref_mode(0);
     else if (max_offset_ignore > 0)
       max_offset_ignore--;
     return 0;
   }
   return 1;
+}
+
+/* ================================================== */
+
+static int
+is_leap_second_day(struct tm *stm) {
+  /* Allow leap second only on the last day of June and December */
+  return (stm->tm_mon == 5 && stm->tm_mday == 30) ||
+         (stm->tm_mon == 11 && stm->tm_mday == 31);
 }
 
 /* ================================================== */
@@ -563,12 +617,7 @@ get_tz_leap(time_t when)
 
   stm = *gmtime(&when);
 
-  /* Check for leap second only in the latter half of June and December */
-  if (stm.tm_mon == 5 && stm.tm_mday > 14)
-    stm.tm_mday = 30;
-  else if (stm.tm_mon == 11 && stm.tm_mday > 14)
-    stm.tm_mday = 31;
-  else
+  if (!is_leap_second_day(&stm))
     return tz_leap;
 
   /* Temporarily switch to the timezone containing leap seconds */
@@ -610,7 +659,6 @@ get_tz_leap(time_t when)
 static void
 update_leap_status(NTP_Leap leap, time_t now)
 {
-  struct tm stm;
   int leap_sec;
 
   leap_sec = 0;
@@ -619,20 +667,16 @@ update_leap_status(NTP_Leap leap, time_t now)
     leap = get_tz_leap(now);
 
   if (leap == LEAP_InsertSecond || leap == LEAP_DeleteSecond) {
-    /* Insert/delete leap second only on June 30 or December 31
-       and in other months ignore the leap status completely */
+    /* Check that leap second is allowed today */
 
-    stm = *gmtime(&now);
-
-    if (stm.tm_mon != 5 && stm.tm_mon != 11) {
-      leap = LEAP_Normal;
-    } else if ((stm.tm_mon == 5 && stm.tm_mday == 30) ||
-        (stm.tm_mon == 11 && stm.tm_mday == 31)) {
+    if (is_leap_second_day(gmtime(&now))) {
       if (leap == LEAP_InsertSecond) {
         leap_sec = 1;
       } else {
         leap_sec = -1;
       }
+    } else {
+      leap = LEAP_Normal;
     }
   }
   
@@ -657,6 +701,62 @@ write_log(struct timeval *ref_time, char *ref, int stratum, NTP_Leap leap,
             UTI_TimeToLogForm(ref_time->tv_sec), ref, stratum, freq, skew,
             offset, leap_codes[leap], combined_sources, offset_sd,
             uncorrected_offset);
+  }
+}
+
+/* ================================================== */
+
+static void
+special_mode_sync(int valid, double offset)
+{
+  int step;
+
+  switch (mode) {
+    case REF_ModeInitStepSlew:
+      if (!valid) {
+        LOG(LOGS_WARN, LOGF_Reference, "No suitable source for initstepslew");
+        end_ref_mode(0);
+        break;
+      }
+
+      step = fabs(offset) >= CNF_GetInitStepThreshold();
+
+      LOG(LOGS_INFO, LOGF_Reference,
+          "System's initial offset : %.6f seconds %s of true (%s)",
+          fabs(offset), offset >= 0 ? "fast" : "slow", step ? "step" : "slew");
+
+      if (step)
+        LCL_ApplyStepOffset(offset);
+      else
+        LCL_AccumulateOffset(offset, 0.0);
+
+      end_ref_mode(1);
+
+      break;
+    case REF_ModeUpdateOnce:
+    case REF_ModePrintOnce:
+      if (!valid) {
+        LOG(LOGS_WARN, LOGF_Reference, "No suitable source for synchronisation");
+        end_ref_mode(0);
+        break;
+      }
+
+      step = mode == REF_ModeUpdateOnce;
+
+      LOG(LOGS_INFO, LOGF_Reference, "System clock wrong by %.6f seconds (%s)",
+          -offset, step ? "step" : "ignored");
+
+      if (step)
+        LCL_ApplyStepOffset(offset);
+
+      end_ref_mode(1);
+
+      break;
+    case REF_ModeIgnore:
+      /* Do nothing until the mode is changed */
+      break;
+    default:
+      assert(0);
   }
 }
 
@@ -688,10 +788,16 @@ REF_SetReference(int stratum,
   double update_interval;
   double elapsed;
   double correction_rate;
-  double uncorrected_offset;
-  struct timeval now, raw_now, ev_now, ev_raw_now;
+  double uncorrected_offset, accumulate_offset, step_offset;
+  struct timeval now, raw_now;
 
   assert(initialised);
+
+  /* Special modes are implemented elsewhere */
+  if (mode != REF_ModeNormal) {
+    special_mode_sync(1, offset);
+    return;
+  }
 
   /* Guard against dividing by zero */
   if (skew < MIN_SKEW)
@@ -716,10 +822,7 @@ REF_SetReference(int stratum,
   }
     
   LCL_ReadRawTime(&raw_now);
-
-  /* This is cheaper than calling LCL_CookTime */
-  SCH_GetLastEventTime(&ev_now, NULL, &ev_raw_now);
-  UTI_DiffTimevalsToDouble(&uncorrected_offset, &ev_now, &ev_raw_now);
+  LCL_GetOffsetCorrection(&raw_now, &uncorrected_offset, NULL);
   UTI_AddDoubleToTimeval(&raw_now, uncorrected_offset, &now);
 
   UTI_DiffTimevalsToDouble(&elapsed, &now, ref_time);
@@ -763,6 +866,16 @@ REF_SetReference(int stratum,
 
   correction_rate = correction_time_ratio * 0.5 * offset_sd * update_interval;
 
+  /* Check if the clock should be stepped */
+  if (is_step_limit_reached(our_offset, uncorrected_offset)) {
+    /* Cancel the uncorrected offset and correct the total offset by step */
+    accumulate_offset = uncorrected_offset;
+    step_offset = our_offset - uncorrected_offset;
+  } else {
+    accumulate_offset = our_offset;
+    step_offset = 0.0;
+  }
+
   /* Eliminate updates that are based on totally unreliable frequency
      information. Ignore this limit with manual reference. */
 
@@ -797,21 +910,23 @@ REF_SetReference(int stratum,
 
     our_residual_freq = new_freq - our_frequency;
 
-    LCL_AccumulateFrequencyAndOffset(our_frequency, our_offset, correction_rate);
+    LCL_AccumulateFrequencyAndOffset(our_frequency, accumulate_offset, correction_rate);
     
   } else {
+    DEBUG_LOG(LOGF_Reference, "Skew %f too large to track, offset=%f", skew, accumulate_offset);
 
-#if 0    
-    LOG(LOGS_INFO, LOGF_Reference, "Skew %f too large to track, offset=%f", skew, our_offset);
-#endif
-    LCL_AccumulateOffset(our_offset, correction_rate);
+    LCL_AccumulateOffset(accumulate_offset, correction_rate);
 
     our_residual_freq = frequency;
   }
 
   update_leap_status(leap, raw_now.tv_sec);
   maybe_log_offset(our_offset, raw_now.tv_sec);
-  maybe_make_step();
+
+  if (step_offset != 0.0) {
+    LCL_ApplyStepOffset(step_offset);
+    LOG(LOGS_WARN, LOGF_Reference, "System clock was stepped by %.6f seconds", -step_offset);
+  }
 
   abs_freq_ppm = LCL_ReadAbsoluteFrequency();
 
@@ -884,9 +999,15 @@ REF_SetUnsynchronised(void)
 
   assert(initialised);
 
-  /* This is cheaper than calling LCL_CookTime */
-  SCH_GetLastEventTime(&now, NULL, &now_raw);
-  UTI_DiffTimevalsToDouble(&uncorrected_offset, &now, &now_raw);
+  /* Special modes are implemented elsewhere */
+  if (mode != REF_ModeNormal) {
+    special_mode_sync(0, 0.0);
+    return;
+  }
+
+  LCL_ReadRawTime(&now_raw);
+  LCL_GetOffsetCorrection(&now_raw, &uncorrected_offset, NULL);
+  UTI_AddDoubleToTimeval(&now_raw, uncorrected_offset, &now);
 
   if (fb_drifts) {
     schedule_fb_drift(&now);
@@ -1000,9 +1121,6 @@ void
 REF_ModifyMaxupdateskew(double new_max_update_skew)
 {
   max_update_skew = new_max_update_skew * 1.0e-6;
-#if 0
-  LOG(LOGS_INFO, LOGF_Reference, "New max update skew = %.3fppm", new_max_update_skew);
-#endif
 }
 
 /* ================================================== */
@@ -1084,5 +1202,3 @@ REF_GetTrackingReport(RPT_TrackingReport *rep)
   }
 
 }
-
-/* ================================================== */

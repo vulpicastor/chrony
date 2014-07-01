@@ -3,6 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -33,6 +34,9 @@
 
 #include "ntp.h"
 #include "reports.h"
+
+/* Size of the source reachability register */
+#define SOURCE_REACH_BITS 8
 
 /* This datatype is used to hold information about sources.  The
    instance must be passed when calling many of the interface
@@ -114,6 +118,12 @@ extern void SRC_GetFrequencyRange(SRC_Instance instance, double *lo, double *hi)
 
 extern void SRC_AccumulateSample(SRC_Instance instance, struct timeval *sample_time, double offset, double peer_delay, double peer_dispersion, double root_delay, double root_dispersion, int stratum, NTP_Leap leap_status);
 
+/* This routine sets the source as receiving reachability updates */
+extern void SRC_SetActive(SRC_Instance inst);
+
+/* This routine sets the source as not receiving reachability updates */
+extern void SRC_UnsetActive(SRC_Instance inst);
+
 /* This routine indicates that packets with valid headers are being
    received from the designated source */
 extern void SRC_SetSelectable(SRC_Instance instance);
@@ -131,11 +141,11 @@ extern void SRC_ResetReachability(SRC_Instance inst);
 /* This routine is used to select the best source from amongst those
    we currently have valid data on, and use it as the tracking base
    for the local time.  Updates are only made to the local reference
-   if a new source is selected or match_addr is equal to the selected
-   reference source address. (This avoids updating the frequency
+   if a new source is selected or updated_inst is the selected
+   reference source. (This avoids updating the frequency
    tracking for every sample from other sources - only the ones from
    the selected reference make a difference) */
-extern void SRC_SelectSource(uint32_t match_refid);
+extern void SRC_SelectSource(SRC_Instance updated_inst);
 
 /* Force reselecting the best source */
 extern void SRC_ReselectSource(void);
@@ -162,6 +172,7 @@ extern void SRC_ReloadSources(void);
 
 extern int SRC_IsSyncPeer(SRC_Instance inst);
 extern int SRC_ReadNumberOfSources(void);
+extern int SRC_ActiveSources(void);
 extern int SRC_ReportSource(int index, RPT_SourceReport *report, struct timeval *now);
 
 extern int SRC_ReportSourcestats(int index, RPT_SourcestatsReport *report, struct timeval *now);
