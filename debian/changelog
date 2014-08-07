@@ -10,6 +10,9 @@ chrony (1.30-1) UNRELEASED; urgency=medium
     - Modify dispersion accounting in refclocks to prevent PPS getting
         stuck with large dispersion and not accepting new samples.
 
+  * Add gpg signature of upstream developer for use with uscan.
+  * Update debian/watch, add check of upstream gpg signature.
+
  -- Joachim Wiedorn <ad_debian@joonet.de>  Thu, 07 Aug 2014 15:45:05 +0200
 
 chrony (1.29.1-1) unstable; urgency=high

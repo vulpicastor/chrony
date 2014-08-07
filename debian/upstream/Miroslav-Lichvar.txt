@@ -1,0 +1,6 @@
+pub   1024D/0x5FF06F29BA1E013B 2007-03-29 [expires: 2016-02-13]
+      Key fingerprint = 8B1F 4A9A DA73 D401 E308  5A0B 5FF0 6F29 BA1E 013B
+uid                 [ unknown] Miroslav Lichvar <mlichvar@redhat.com>
+sub   2048g/0x2EFD35E88CB71D7E 2007-03-29 [expires: 2016-02-13]
+      Key fingerprint = 78D5 DCBA FBC9 6B38 0D74  4BDF 2EFD 35E8 8CB7 1D7E
+

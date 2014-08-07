@@ -1,3 +1,4 @@
 # watch control file for uscan
 version=3
-http://download.tuxfamily.org/chrony/chrony-(\d\.\d+)\.tar\.gz
+opts=pgpsigurlmangle=s/\.tar\.gz$/-tar-gz-asc.txt/ \
+http://download.tuxfamily.org/chrony/chrony-([\d\.]*)\.tar\.gz
