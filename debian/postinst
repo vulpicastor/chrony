@@ -66,6 +66,9 @@ explain what to do."
           ucf /etc/chrony/chrony.conf.new /etc/chrony/chrony.conf
           rm /etc/chrony/chrony.conf.new
         fi
+
+        # obsolete, instead use logrotate
+        rm -rf /etc/cron.weekly/chrony
     ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

@@ -18,6 +18,8 @@ case "$1" in
         rm -rf /etc/chrony
         rm -rf /var/lib/chrony
         rm -rf /var/log/chrony
+        # obsolete, instead use logrotate
+        rm -rf /etc/cron.weekly/chrony
     ;;
 
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
