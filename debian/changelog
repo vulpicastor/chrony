@@ -1,3 +1,17 @@
+chrony (1.30-1) UNRELEASED; urgency=medium
+
+  * New upstream release with following bugfixes:
+    - Fix crash when selecting with multiple preferred sources.
+    - Fix frequency calculation with large frequency offsets.
+    - Fix code writing drift and RTC files to compile correctly.
+    - Fix -4/-6 options in chronyc to not reset hostname set by -h.
+    - Fix refclock sample validation with sub-second polling interval.
+    - Set stratum correctly with non-PPS SOCK refclock and local stratum.
+    - Modify dispersion accounting in refclocks to prevent PPS getting
+        stuck with large dispersion and not accepting new samples.
+
+ -- Joachim Wiedorn <ad_debian@joonet.de>  Thu, 07 Aug 2014 15:45:05 +0200
+
 chrony (1.29.1-1) unstable; urgency=high
 
   * New upstream release with bugfix:
