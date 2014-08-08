@@ -2,8 +2,8 @@ Package:     chrony
 Subject:     do not look for ncurses
 Author:      Sven Joachim <svenjoac at gmx.de>
 Bug-Debian:  http://bugs.debian.org/646732
-Forwarded:   no
-Last-Update: 2014-08-07
+Forwarded:   yes, per mail at 08.08.2014
+Last-Update: 2014-08-08
 
 Patch the configure script to not look for ncurses, because 
 it is useless (upstream build system erroneously believes 

@@ -1,8 +1,8 @@
 Package:     chrony
 Subject:     fix small typo in manpage
 Author:      Joachim Wiedorn <ad_debian at joonet.de>
-Forwarded:   no
-Last-Update: 2014-08-07
+Forwarded:   yes, per mail at 08.08.2014
+Last-Update: 2014-08-08
 ---
 
 diff -urN s00/chronyd.8.in s01/chronyd.8.in

@@ -1,4 +1,3 @@
-usr/share/chrony
 etc/chrony
 etc/ppp/ip-up.d
 etc/ppp/ip-down.d

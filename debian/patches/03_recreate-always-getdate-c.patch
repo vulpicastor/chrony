@@ -1,8 +1,8 @@
 Package:     chrony
 Subject:     recreate always getdate.c
 Author:      John G. Hasler <jhasler at debian.org>
-Forwarded:   no
-Last-Update: 2013-11-22
+Forwarded:   yes, per mail at 08.08.2014
+Last-Update: 2014-08-08
 
 Source file getdate.c should always be created new.
 And remove it in "clean".
