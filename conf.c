@@ -79,7 +79,7 @@ static void parse_tempcomp(char *);
 static int restarted = 0;
 static int generate_command_key = 0;
 static char *rtc_device = "/dev/rtc";
-static int acquisition_port = 0; /* 0 means let kernel choose port */
+static int acquisition_port = -1;
 static int ntp_port = 123;
 static char *keys_file = NULL;
 static char *drift_file = NULL;
@@ -1212,7 +1212,7 @@ CNF_AddBroadcasts(void)
 
 /* ================================================== */
 
-unsigned short
+int
 CNF_GetNTPPort(void)
 {
   return ntp_port;
@@ -1220,7 +1220,7 @@ CNF_GetNTPPort(void)
 
 /* ================================================== */
 
-unsigned short
+int
 CNF_GetAcquisitionPort(void)
 {
   return acquisition_port;

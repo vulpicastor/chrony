@@ -85,8 +85,8 @@ struct NCR_Instance_Record {
                                    received packets) */
 
   int presend_minpoll;           /* If the current polling interval is
-                                    at least this, an echo datagram
-                                    will be send some time before every
+                                    at least this, an extra client packet
+                                    will be send some time before normal
                                     transmit.  This ensures that both
                                     us and the server/peer have an ARP
                                     entry for each other ready, which
@@ -191,7 +191,7 @@ struct NCR_Instance_Record {
 #define IBURST_GOOD_SAMPLES 4
 #define IBURST_TOTAL_SAMPLES SOURCE_REACH_BITS
 
-/* Time to wait after sending echo to 'warm up' link */
+/* Time to wait after sending packet to 'warm up' link */
 #define WARM_UP_DELAY 4.0
 
 /* The NTP protocol version that we support */
@@ -229,12 +229,79 @@ static ADF_AuthTable access_auth_table;
 /* Forward prototypes */
 
 static void transmit_timeout(void *arg);
+static double get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx);
+
+/* ================================================== */
+
+static void
+do_size_checks(void)
+{
+  /* Assertions to check the sizes of certain data types
+     and the positions of certain record fields */
+
+  /* Check that certain invariants are true */
+  assert(sizeof(NTP_int32) == 4);
+  assert(sizeof(NTP_int64) == 8);
+
+  /* Check offsets of all fields in the NTP packet format */
+  assert(offsetof(NTP_Packet, lvm)             ==  0);
+  assert(offsetof(NTP_Packet, stratum)         ==  1);
+  assert(offsetof(NTP_Packet, poll)            ==  2);
+  assert(offsetof(NTP_Packet, precision)       ==  3);
+  assert(offsetof(NTP_Packet, root_delay)      ==  4);
+  assert(offsetof(NTP_Packet, root_dispersion) ==  8);
+  assert(offsetof(NTP_Packet, reference_id)    == 12);
+  assert(offsetof(NTP_Packet, reference_ts)    == 16);
+  assert(offsetof(NTP_Packet, originate_ts)    == 24);
+  assert(offsetof(NTP_Packet, receive_ts)      == 32);
+  assert(offsetof(NTP_Packet, transmit_ts)     == 40);
+}
+
+/* ================================================== */
+
+static void
+do_time_checks(void)
+{
+  struct timeval now;
+  time_t warning_advance = 3600 * 24 * 365 * 10; /* 10 years */
+
+#ifdef HAVE_LONG_TIME_T
+  /* Check that time before NTP_ERA_SPLIT underflows correctly */
+
+  struct timeval tv1 = {NTP_ERA_SPLIT, 1}, tv2 = {NTP_ERA_SPLIT - 1, 1};
+  NTP_int64 ntv1, ntv2;
+  int r;
+
+  UTI_TimevalToInt64(&tv1, &ntv1, 0);
+  UTI_TimevalToInt64(&tv2, &ntv2, 0);
+  UTI_Int64ToTimeval(&ntv1, &tv1);
+  UTI_Int64ToTimeval(&ntv2, &tv2);
+
+  r = tv1.tv_sec == NTP_ERA_SPLIT &&
+      tv1.tv_sec + (1ULL << 32) - 1 == tv2.tv_sec;
+
+  assert(r);
+
+  LCL_ReadRawTime(&now);
+  if (tv2.tv_sec - now.tv_sec < warning_advance)
+    LOG(LOGS_WARN, LOGF_NtpCore, "Assumed NTP time ends at %s!",
+        UTI_TimeToLogForm(tv2.tv_sec));
+#else
+  LCL_ReadRawTime(&now);
+  if (now.tv_sec > 0x7fffffff - warning_advance)
+    LOG(LOGS_WARN, LOGF_NtpCore, "System time ends at %s!",
+        UTI_TimeToLogForm(0x7fffffff));
+#endif
+}
 
 /* ================================================== */
 
 void
 NCR_Initialise(void)
 {
+  do_size_checks();
+  do_time_checks();
+
   logfileid = CNF_GetLogMeasurements() ? LOG_FileOpen("measurements",
       "   Date (UTC) Time     IP Address   L St 1234 abc 5678 LP RP Score Offset     Peer del. Peer disp. Root del.  Root disp.")
     : -1;
@@ -254,7 +321,7 @@ NCR_Finalise(void)
 /* ================================================== */
 
 static void
-start_initial_timeout(NCR_Instance inst)
+restart_timeout(NCR_Instance inst, double delay)
 {
   /* Check if we can transmit */
   if (inst->tx_suspended) {
@@ -267,24 +334,36 @@ start_initial_timeout(NCR_Instance inst)
     SCH_RemoveTimeout(inst->timeout_id);
 
   /* Start new timer for transmission */
-  inst->timeout_id = SCH_AddTimeoutInClass(INITIAL_DELAY, SAMPLING_SEPARATION,
+  inst->timeout_id = SCH_AddTimeoutInClass(delay, SAMPLING_SEPARATION,
                                            SAMPLING_RANDOMNESS,
                                            SCH_NtpSamplingClass,
                                            transmit_timeout, (void *)inst);
+  inst->timer_running = 1;
+}
 
+/* ================================================== */
+
+static void
+start_initial_timeout(NCR_Instance inst)
+{
   if (!inst->timer_running) {
     /* This will be the first transmission after mode change */
 
-    inst->timer_running = 1;
-
     /* Mark source active */
     SRC_SetActive(inst->source);
+  }
 
-    /* Open client socket */
-    if (inst->mode == MODE_CLIENT) {
-      assert(inst->local_addr.sock_fd == INVALID_SOCK_FD);
-      inst->local_addr.sock_fd = NIO_GetClientSocket(&inst->remote_addr);
-    }
+  restart_timeout(inst, INITIAL_DELAY);
+}
+
+/* ================================================== */
+
+static void
+close_client_socket(NCR_Instance inst)
+{
+  if (inst->mode == MODE_CLIENT && inst->local_addr.sock_fd != INVALID_SOCK_FD) {
+    NIO_CloseClientSocket(inst->local_addr.sock_fd);
+    inst->local_addr.sock_fd = INVALID_SOCK_FD;
   }
 }
 
@@ -305,11 +384,7 @@ take_offline(NCR_Instance inst)
   /* And inactive */
   SRC_UnsetActive(inst->source);
 
-  /* Close client socket */
-  if (inst->mode == MODE_CLIENT && inst->local_addr.sock_fd != INVALID_SOCK_FD) {
-    NIO_CloseClientSocket(inst->local_addr.sock_fd);
-    inst->local_addr.sock_fd = INVALID_SOCK_FD;
-  }
+  close_client_socket(inst);
 
   NCR_ResetInstance(inst);
 }
@@ -328,7 +403,7 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
 
   switch (type) {
     case NTP_SERVER:
-      /* Client socket will be obtained when timer is started */
+      /* Client socket will be obtained when sending request */
       result->local_addr.sock_fd = INVALID_SOCK_FD;
       result->mode = MODE_CLIENT;
       break;
@@ -377,6 +452,7 @@ NCR_GetInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourcePar
   result->timeout_id = 0;
   result->tx_suspended = 1;
   result->opmode = params->online ? MD_ONLINE : MD_OFFLINE;
+  result->local_poll = result->minpoll;
   
   NCR_ResetInstance(result);
 
@@ -423,7 +499,6 @@ NCR_ResetInstance(NCR_Instance instance)
   instance->tx_count = 0;
   instance->presend_done = 0;
 
-  instance->local_poll = instance->minpoll;
   instance->poll_score = 0.0;
   instance->remote_poll = 0;
   instance->remote_stratum = 0;
@@ -436,6 +511,14 @@ NCR_ResetInstance(NCR_Instance instance)
   instance->local_tx.tv_usec = 0;
   instance->local_ntp_tx.hi = 0;
   instance->local_ntp_tx.lo = 0;
+
+  if (instance->local_poll != instance->minpoll) {
+    instance->local_poll = instance->minpoll;
+
+    /* The timer was set with a longer poll interval, restart it */
+    if (instance->timer_running)
+      restart_timeout(instance, get_transmit_delay(instance, 0, 0.0));
+  }
 }
 
 /* ================================================== */
@@ -598,7 +681,7 @@ get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx)
 
 /* ================================================== */
 
-static void
+static int
 transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 int my_poll, /* The log2 of the local poll interval */
                 int version, /* The NTP version to be set in the packet */
@@ -620,7 +703,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 )
 {
   NTP_Packet message;
-  int leap;
+  int leap, ret;
   struct timeval local_transmit;
 
   /* Parameters read from reference module */
@@ -704,17 +787,17 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
         (unsigned char *)&message.auth_data, sizeof (message.auth_data));
     if (auth_len > 0) {
       message.auth_keyid = htonl(key_id);
-      NIO_SendAuthenticatedPacket(&message, where_to, from,
+      ret = NIO_SendAuthenticatedPacket(&message, where_to, from,
           sizeof (message.auth_keyid) + auth_len);
     } else {
       DEBUG_LOG(LOGF_NtpCore,
                 "Could not generate auth data with key %lu to send packet",
                 key_id);
-      return;
+      return 0;
     }
   } else {
     UTI_TimevalToInt64(&local_transmit, &message.transmit_ts, ts_fuzz);
-    NIO_SendNormalPacket(&message, where_to, from);
+    ret = NIO_SendNormalPacket(&message, where_to, from);
   }
 
   if (local_tx) {
@@ -725,6 +808,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
     *local_ntp_tx = message.transmit_ts;
   }
 
+  return ret;
 }
 
 /* ================================================== */
@@ -734,7 +818,7 @@ static void
 transmit_timeout(void *arg)
 {
   NCR_Instance inst = (NCR_Instance) arg;
-  double timeout_delay;
+  int sent;
 
   inst->timer_running = 0;
 
@@ -758,8 +842,15 @@ transmit_timeout(void *arg)
   DEBUG_LOG(LOGF_NtpCore, "Transmit timeout for [%s:%d]",
       UTI_IPToString(&inst->remote_addr.ip_addr), inst->remote_addr.port);
 
+  /* Open new client socket */
+  if (inst->mode == MODE_CLIENT) {
+    close_client_socket(inst);
+    assert(inst->local_addr.sock_fd == INVALID_SOCK_FD);
+    inst->local_addr.sock_fd = NIO_GetClientSocket(&inst->remote_addr);
+  }
+
   /* Check whether we need to 'warm up' the link to the other end by
-     sending an echo exchange to ensure both ends' ARP caches are
+     sending an NTP exchange to ensure both ends' ARP caches are
      primed.  On loaded systems this might also help ensure that bits
      of the program are paged in properly before we start. */
 
@@ -767,33 +858,42 @@ transmit_timeout(void *arg)
       (inst->presend_minpoll <= inst->local_poll) &&
       !inst->presend_done) {
     
-    /* Send */
-    NIO_SendEcho(&inst->remote_addr, &inst->local_addr);
+    /* Send a client packet, don't store the local tx values
+       as the reply will be ignored */
+    transmit_packet(MODE_CLIENT, inst->local_poll, NTP_VERSION, 0, 0,
+                    &inst->remote_orig, &inst->local_rx, NULL, NULL,
+                    &inst->remote_addr, &inst->local_addr);
 
     inst->presend_done = 1;
 
     /* Requeue timeout */
-    inst->timer_running = 1;
-    inst->timeout_id = SCH_AddTimeoutInClass(WARM_UP_DELAY, SAMPLING_SEPARATION,
-                                             SAMPLING_RANDOMNESS,
-                                             SCH_NtpSamplingClass,
-                                             transmit_timeout, (void *)inst);
+    restart_timeout(inst, WARM_UP_DELAY);
 
     return;
   }
 
   inst->presend_done = 0; /* Reset for next time */
 
+  sent = transmit_packet(inst->mode, inst->local_poll,
+                         NTP_VERSION,
+                         inst->do_auth, inst->auth_key_id,
+                         &inst->remote_orig,
+                         &inst->local_rx, &inst->local_tx, &inst->local_ntp_tx,
+                         &inst->remote_addr,
+                         &inst->local_addr);
+
   ++inst->tx_count;
 
-  /* If the source loses connectivity, back off the sampling rate to reduce
-     wasted sampling. If it's the source to which we are currently locked,
-     back off slower. */
+  /* If the source loses connectivity and our packets are still being sent,
+     back off the sampling rate to reduce the network traffic.  If it's the
+     source to which we are currently locked, back off slowly. */
 
   if (inst->tx_count >= 2) {
     /* Implies we have missed at least one transmission */
 
-    adjust_poll(inst, SRC_IsSyncPeer(inst->source) ? 0.1 : 0.25);
+    if (sent) {
+      adjust_poll(inst, SRC_IsSyncPeer(inst->source) ? 0.1 : 0.25);
+    }
 
     SRC_UpdateReachability(inst->source, 0);
 
@@ -802,16 +902,12 @@ transmit_timeout(void *arg)
     }
   }
 
-  transmit_packet(inst->mode, inst->local_poll,
-                  NTP_VERSION,
-                  inst->do_auth, inst->auth_key_id,
-                  &inst->remote_orig,
-                  &inst->local_rx, &inst->local_tx, &inst->local_ntp_tx,
-                  &inst->remote_addr,
-                  &inst->local_addr);
-
   switch (inst->opmode) {
     case MD_BURST_WAS_ONLINE:
+      /* When not reachable, don't stop online burst until sending succeeds */
+      if (!sent && !SRC_IsReachable(inst->source))
+        break;
+      /* Fall through */
     case MD_BURST_WAS_OFFLINE:
       --inst->burst_total_samples_to_go;
       break;
@@ -820,12 +916,7 @@ transmit_timeout(void *arg)
   }
 
   /* Restart timer for this message */
-  timeout_delay = get_transmit_delay(inst, 1, 0.0);
-  inst->timer_running = 1;
-  inst->timeout_id = SCH_AddTimeoutInClass(timeout_delay, SAMPLING_SEPARATION,
-                                           SAMPLING_RANDOMNESS,
-                                           SCH_NtpSamplingClass,
-                                           transmit_timeout, (void *)inst);
+  restart_timeout(inst, get_transmit_delay(inst, 1, 0.0));
 }
 
 
@@ -1257,6 +1348,10 @@ receive_packet(NTP_Packet *message, struct timeval *now, double now_err, NCR_Ins
       adjust_poll(inst, 0.1);
     }
 
+    /* If in client mode, no more packets are expected to be coming from the
+       server and the socket can be closed */
+    close_client_socket(inst);
+
     requeue_transmit = 1;
   }
 
@@ -1271,11 +1366,7 @@ receive_packet(NTP_Packet *message, struct timeval *now, double now_err, NCR_Ins
 
     /* Get rid of old timeout and start a new one */
     assert(inst->timer_running);
-    SCH_RemoveTimeout(inst->timeout_id);
-    inst->timeout_id = SCH_AddTimeoutInClass(delay_time, SAMPLING_SEPARATION,
-                                             SAMPLING_RANDOMNESS,
-                                             SCH_NtpSamplingClass,
-                                             transmit_timeout, (void *)inst);
+    restart_timeout(inst, delay_time);
   }
 
   /* Do measurement logging */
@@ -1418,6 +1509,9 @@ NCR_ProcessKnown
       break;
 
     case MODE_SERVER:
+      /* Ignore presend reply */
+      if (inst->presend_done)
+        break;
 
       switch(inst->mode) {
         case MODE_ACTIVE:
