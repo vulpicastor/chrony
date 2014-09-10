@@ -1,4 +1,4 @@
-.TH chrony.conf 5 "July 2014" "chrony 1.30" "Configuration Files"
+.TH chrony.conf 5 "September 2014" "chrony 1.31" "Configuration Files"
 .SH NAME
 chrony.conf \- chronyd configuration file
 

@@ -431,7 +431,6 @@ static void
 read_coefs_from_file(void)
 {
   FILE *in;
-  char line[256];
 
   if (!tried_to_load_coefs) {
 
@@ -439,26 +438,17 @@ read_coefs_from_file(void)
 
     tried_to_load_coefs = 1;
 
-    in = fopen(coefs_file_name, "r");
-    if (in) {
-      if (fgets(line, sizeof(line), in)) {
-        if (sscanf(line, "%d%ld%lf%lf",
-                   &valid_coefs_from_file,
-                   &file_ref_time,
-                   &file_ref_offset,
-                   &file_rate_ppm) == 4) {
-        } else {
-          LOG(LOGS_WARN, LOGF_RtcLinux, "Could not parse coefficients line from RTC file %s",
-              coefs_file_name);
-        }
+    if (coefs_file_name && (in = fopen(coefs_file_name, "r"))) {
+      if (fscanf(in, "%d%ld%lf%lf",
+                 &valid_coefs_from_file,
+                 &file_ref_time,
+                 &file_ref_offset,
+                 &file_rate_ppm) == 4) {
       } else {
-        LOG(LOGS_WARN, LOGF_RtcLinux, "Could not read first line from RTC file %s",
+        LOG(LOGS_WARN, LOGF_RtcLinux, "Could not read coefficients from RTC file %s",
             coefs_file_name);
       }
       fclose(in);
-    } else {
-      LOG(LOGS_WARN, LOGF_RtcLinux, "Could not open RTC file %s for reading",
-          coefs_file_name);
     }
   }
 }
@@ -550,7 +540,8 @@ RTC_Linux_Initialise(void)
 
   fd = open (CNF_GetRtcDevice(), O_RDWR);
   if (fd < 0) {
-    LOG(LOGS_ERR, LOGF_RtcLinux, "Could not open %s, %s", CNF_GetRtcDevice(), strerror(errno));
+    LOG(LOGS_ERR, LOGF_RtcLinux, "Could not open RTC device %s : %s",
+        CNF_GetRtcDevice(), strerror(errno));
     return 0;
   }
 
@@ -975,15 +966,14 @@ RTC_Linux_WriteParameters(void)
    etc in this case, since we have fewer requirements regarding the
    RTC behaviour than we do for the rest of the module. */
 
-void
+int
 RTC_Linux_TimePreInit(void)
 {
   int fd, status;
   struct rtc_time rtc_raw, rtc_raw_retry;
   struct tm rtc_tm;
-  time_t rtc_t, estimated_correct_rtc_t;
-  long interval;
-  double accumulated_error = 0.0;
+  time_t rtc_t;
+  double accumulated_error, sys_offset;
   struct timeval new_sys_time, old_sys_time;
 
   coefs_file_name = CNF_GetRtcFile();
@@ -994,7 +984,7 @@ RTC_Linux_TimePreInit(void)
   fd = open(CNF_GetRtcDevice(), O_RDONLY);
 
   if (fd < 0) {
-    return; /* Can't open it, and won't be able to later */
+    return 0; /* Can't open it, and won't be able to later */
   }
 
   /* Retry reading the rtc until both read attempts give the same sec value.
@@ -1006,6 +996,11 @@ RTC_Linux_TimePreInit(void)
       status = ioctl(fd, RTC_RD_TIME, &rtc_raw_retry);
     }
   } while (status >= 0 && rtc_raw.tm_sec != rtc_raw_retry.tm_sec);
+
+  /* Read system clock */
+  LCL_ReadCookedTime(&old_sys_time, NULL);
+
+  close(fd);
 
   if (status >= 0) {
     /* Convert to seconds since 1970 */
@@ -1023,37 +1018,35 @@ RTC_Linux_TimePreInit(void)
       /* Work out approximatation to correct time (to about the
          nearest second) */
       if (valid_coefs_from_file) {
-        interval = rtc_t - file_ref_time;
-        accumulated_error = file_ref_offset + (double)(interval) * 1.0e-6 * file_rate_ppm;
-
-        /* Correct time */
-        estimated_correct_rtc_t = rtc_t - (long)(0.5 + accumulated_error);
+        accumulated_error = file_ref_offset +
+          (rtc_t - file_ref_time) * 1.0e-6 * file_rate_ppm;
       } else {
-        estimated_correct_rtc_t = rtc_t - (long)(0.5 + accumulated_error);
+        accumulated_error = 0.0;
       }
 
-      new_sys_time.tv_sec = estimated_correct_rtc_t;
-      new_sys_time.tv_usec = 0;
+      /* Correct time */
+
+      new_sys_time.tv_sec = rtc_t;
+      /* Average error in the RTC reading */
+      new_sys_time.tv_usec = 500000;
+
+      UTI_AddDoubleToTimeval(&new_sys_time, -accumulated_error, &new_sys_time);
+
+      UTI_DiffTimevalsToDouble(&sys_offset, &old_sys_time, &new_sys_time);
 
       /* Set system time only if the step is larger than 1 second */
-      if (!(gettimeofday(&old_sys_time, NULL) < 0) &&
-          (old_sys_time.tv_sec - new_sys_time.tv_sec > 1 ||
-           old_sys_time.tv_sec - new_sys_time.tv_sec < -1)) {
-
+      if (fabs(sys_offset) >= 1.0) {
         LOG(LOGS_INFO, LOGF_RtcLinux, "Set system time, error in RTC = %f",
             accumulated_error);
-
-        /* Tough luck if this fails */
-        if (settimeofday(&new_sys_time, NULL) < 0) {
-          LOG(LOGS_WARN, LOGF_RtcLinux, "Could not settimeofday");
-        }
+        LCL_ApplyStepOffset(sys_offset);
       }
     } else {
       LOG(LOGS_WARN, LOGF_RtcLinux, "Could not convert RTC reading to seconds since 1/1/1970");
+      return 0;
     }
   }
 
-  close(fd);
+  return 1;
 }
 
 /* ================================================== */

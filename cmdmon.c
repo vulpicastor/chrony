@@ -199,6 +199,14 @@ prepare_socket(int family, int port_number)
     LOG(LOGS_ERR, LOGF_CmdMon, "Could not set reuseaddr socket options");
     /* Don't quit - we might survive anyway */
   }
+
+#ifdef IP_FREEBIND
+  /* Allow binding to address that doesn't exist yet */
+  if (setsockopt(sock_fd, IPPROTO_IP, IP_FREEBIND, (char *)&on_off, sizeof(on_off)) < 0) {
+    LOG(LOGS_ERR, LOGF_CmdMon, "Could not set free bind socket option");
+  }
+#endif
+
 #ifdef HAVE_IPV6
   if (family == AF_INET6) {
 #ifdef IPV6_V6ONLY
@@ -1636,6 +1644,9 @@ read_from_cmd_socket(void *anything)
     return;
   }
 
+  if (from_length > sizeof (where_from))
+    LOG_FATAL(LOGF_CmdMon, "Truncated source address");
+
   read_length = status;
 
   LCL_ReadRawTime(&now);
@@ -1832,20 +1843,22 @@ read_from_cmd_socket(void *anything)
   }
 
   valid_ts = 0;
+  issue_token = 0;
 
   if (auth_ok) {
-    struct timeval ts;
-
-    UTI_TimevalNetworkToHost(&rx_message.data.logon.ts, &ts);
-    if ((utoken_ok && token_ok) ||
-        ((ntohl(rx_message.utoken) == SPECIAL_UTOKEN) &&
-         (rx_command == REQ_LOGON) &&
-         (valid_ts = ts_is_unique_and_not_stale(&ts, &now))))
+    if (utoken_ok && token_ok) {
       issue_token = 1;
-    else 
-      issue_token = 0;
-  } else {
-    issue_token = 0;
+    } else if (rx_command == REQ_LOGON &&
+               ntohl(rx_message.utoken) == SPECIAL_UTOKEN) {
+      struct timeval ts;
+
+      UTI_TimevalNetworkToHost(&rx_message.data.logon.ts, &ts);
+      valid_ts = ts_is_unique_and_not_stale(&ts, &now);
+
+      if (valid_ts) {
+        issue_token = 1;
+      }
+    }
   }
 
   authenticated = auth_ok & utoken_ok & token_ok;

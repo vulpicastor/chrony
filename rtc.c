@@ -28,6 +28,7 @@
 #include "sysincl.h"
 
 #include "rtc.h"
+#include "local.h"
 #include "logging.h"
 #include "conf.h"
 
@@ -42,7 +43,7 @@ static int driver_initialised = 0;
 static struct {
   int  (*init)(void);
   void (*fini)(void);
-  void (*time_pre_init)(void);
+  int  (*time_pre_init)(void);
   void (*time_init)(void (*after_hook)(void*), void *anything);
   void (*start_measurements)(void);
   int  (*write_parameters)(void);
@@ -72,12 +73,50 @@ static struct {
 };
      
 /* ================================================== */
+/* Set the system clock to the time of last modification of driftfile
+   if it's in the future */
+
+static void
+fallback_time_init(void)
+{
+  struct timeval now;
+  struct stat buf;
+  char *drift_file;
+
+  drift_file = CNF_GetDriftFile();
+  if (!drift_file)
+    return;
+
+  if (stat(drift_file, &buf))
+    return;
+
+  LCL_ReadCookedTime(&now, NULL);
+
+  if (now.tv_sec < buf.st_mtime) {
+    LCL_ApplyStepOffset(now.tv_sec - buf.st_mtime);
+    LOG(LOGS_INFO, LOGF_Rtc,
+        "System clock set from driftfile %s", drift_file);
+  }
+}
+
+/* ================================================== */
 
 void
-RTC_Initialise(void)
+RTC_Initialise(int initial_set)
 {
   char *file_name;
-  int ok;
+
+  /* Do an initial read of the RTC and set the system time to it.  This
+     is analogous to what /sbin/hwclock -s would do on Linux.  If that fails
+     or RTC is not supported, set the clock to the time of the last
+     modification of driftfile, so we at least get closer to the truth. */
+  if (initial_set) {
+    if (!driver.time_pre_init || !driver.time_pre_init()) {
+      fallback_time_init();
+    }
+  }
+
+  driver_initialised = 0;
 
   /* This is how we tell whether the user wants to load the RTC
      driver, if he is on a machine where it is an option. */
@@ -90,23 +129,11 @@ RTC_Initialise(void)
 
     if (driver.init) {
       if ((driver.init)()) {
-        ok = 1;
-      } else {
-        ok = 0;
+        driver_initialised = 1;
       }
     } else {
-      ok = 0;
+      LOG(LOGS_ERR, LOGF_Rtc, "RTC not supported on this operating system");
     }
-
-    if (ok) {
-      driver_initialised = 1;
-    } else {
-      driver_initialised = 0;
-      LOG(LOGS_ERR, LOGF_Rtc, "Real time clock not supported on this operating system");
-    }
-
-  } else {
-    driver_initialised = 0;
   }
 }
 
@@ -137,20 +164,7 @@ RTC_TimeInit(void (*after_hook)(void *), void *anything)
   if (driver_initialised) {
     (driver.time_init)(after_hook, anything);
   } else {
-    LOG(LOGS_ERR, LOGF_Rtc, "Can't initialise from real time clock, driver not loaded");
     (after_hook)(anything);
-  }
-}
-
-/* ================================================== */
-/* Do an initial read of the RTC and set the system time to it.  This
-   is analogous to what /sbin/hwclock -s would do on Linux. */
-
-void
-RTC_TimePreInit(void)
-{
-  if (driver.time_pre_init) {
-    (driver.time_pre_init)();
   }
 }
 

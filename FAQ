@@ -121,6 +121,48 @@ sockets to the loopback interface
    If you don't need to use 'chronyc' at all, you can disable the
 command sockets by adding 'cmdport 0' to the configuration file.
 
+   On Linux, if 'chronyd' is compiled with support for Linux
+capabilities (available in the libcap library), you can specify an
+unprivileged user with the '-u' option or 'user' directive in the
+'chrony.conf' file to drop root privileges after start.  The configure
+option '--with-user' can be used to drop the privileges by default.
+
+3.4 How can I improve the accuracy of the system clock with NTP sources?
+------------------------------------------------------------------------
+
+Select NTP servers that are well synchronised, stable and close to your
+network.  It's better to use more than one server, three or four is
+usually recommended as the minimum, so 'chronyd' can detect falsetickers
+and combine measurements from multiple sources.
+
+   There are also useful options which can be set in the 'server'
+directive, they are 'minpoll', 'maxpoll', 'polltarget', 'maxdelay',
+'maxdelayratio' and 'maxdelaydevratio'.
+
+   The first three options set the minimum and maximum allowed polling
+interval, and how should be the actual interval adjusted in the
+specified range.  Their default values are suitable for public NTP
+servers, which normally don't allow too frequent polling, but if you run
+your own NTP servers or have permission to poll the servers frequently,
+setting the options for shorter polling intervals may significantly
+improve the accuracy of the system clock.
+
+   The optimal polling interval depends on many factors, this includes
+the ratio between the wander of the clock and the network jitter
+(sometimes expressed in NTP documents as the Allan intercept), the
+temperature sensitivity of the crystal oscillator and the maximum rate
+of change of the temperature.  An example of the directive for a server
+located in the same LAN could be
+
+     server ntp.local minpoll 2 maxpoll 4 polltarget 30
+
+   The maxdelay options are useful to ignore measurements with larger
+delay (e.g.  due to congestion in the network) and improve the stability
+of the synchronisation.  The 'maxdelaydevratio' option could be added to
+the previous example
+
+     server ntp.local minpoll 2 maxpoll 4 polltarget 30 maxdelaydevratio 2
+
 4 Computer is not synchronising
 ===============================
 

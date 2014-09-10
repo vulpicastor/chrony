@@ -210,9 +210,13 @@ UTI_TimevalToString(struct timeval *tv)
   char *result;
 
   result = NEXT_BUFFER;
-  /* TODO: time_t may be wider than long, switch to int64_t before 2038 */
+#ifdef HAVE_LONG_TIME_T
+  snprintf(result, BUFFER_LENGTH, "%"PRId64".%06lu",
+      (int64_t)tv->tv_sec, (unsigned long)tv->tv_usec);
+#else
   snprintf(result, BUFFER_LENGTH, "%ld.%06lu",
       (long)tv->tv_sec, (unsigned long)tv->tv_usec);
+#endif
   return result;
 }
 
@@ -494,16 +498,17 @@ void
 UTI_TimevalToInt64(struct timeval *src,
                    NTP_int64 *dest, uint32_t fuzz)
 {
-  unsigned long usec = src->tv_usec;
-  unsigned long sec = src->tv_sec;
-  uint32_t lo;
+  uint32_t lo, sec, usec;
+
+  sec = (uint32_t)src->tv_sec;
+  usec = (uint32_t)src->tv_usec;
 
   /* Recognize zero as a special case - it always signifies
      an 'unknown' value */
   if (!usec && !sec) {
     dest->hi = dest->lo = 0;
   } else {
-    dest->hi = htonl(src->tv_sec + JAN_1970);
+    dest->hi = htonl(sec + JAN_1970);
 
     /* This formula gives an error of about 0.1us worst case */
     lo = 4295 * usec - (usec>>5) - (usec>>9);
@@ -521,13 +526,23 @@ void
 UTI_Int64ToTimeval(NTP_int64 *src,
                    struct timeval *dest)
 {
+  uint32_t ntp_sec, ntp_frac;
+
   /* As yet, there is no need to check for zero - all processing that
      has to detect that case is in the NTP layer */
 
-  dest->tv_sec = ntohl(src->hi) - JAN_1970;
+  ntp_sec = ntohl(src->hi);
+  ntp_frac = ntohl(src->lo);
+
+#ifdef HAVE_LONG_TIME_T
+  dest->tv_sec = ntp_sec - (uint32_t)(NTP_ERA_SPLIT + JAN_1970) +
+                 (time_t)NTP_ERA_SPLIT;
+#else
+  dest->tv_sec = ntp_sec - JAN_1970;
+#endif
   
   /* Until I invent a slick way to do this, just do it the obvious way */
-  dest->tv_usec = (int)(0.5 + (double)(ntohl(src->lo)) / 4294.967296);
+  dest->tv_usec = (int)(0.5 + (double)(ntp_frac) / 4294.967296);
 }
 
 /* ================================================== */
@@ -535,21 +550,22 @@ UTI_Int64ToTimeval(NTP_int64 *src,
 void
 UTI_TimevalNetworkToHost(Timeval *src, struct timeval *dest)
 {
-  uint32_t sec_low, sec_high;
+  uint32_t sec_low;
+#ifdef HAVE_LONG_TIME_T
+  uint32_t sec_high;
+#endif
 
   dest->tv_usec = ntohl(src->tv_nsec) / 1000;
-  sec_high = ntohl(src->tv_sec_high);
   sec_low = ntohl(src->tv_sec_low);
+#ifdef HAVE_LONG_TIME_T
+  sec_high = ntohl(src->tv_sec_high);
+  if (sec_high == TV_NOHIGHSEC)
+    sec_high = 0;
 
-  /* get the missing bits from current time when received timestamp
-     is only 32-bit */
-  if (sizeof (time_t) > 4 && sec_high == TV_NOHIGHSEC) {
-    struct timeval now;
-
-    gettimeofday(&now, NULL);
-    sec_high = now.tv_sec >> 16 >> 16;
-  }
-  dest->tv_sec = (time_t)sec_high << 16 << 16 | sec_low;
+  dest->tv_sec = (uint64_t)sec_high << 32 | sec_low;
+#else
+  dest->tv_sec = sec_low;
+#endif
 }
 
 /* ================================================== */
@@ -558,10 +574,11 @@ void
 UTI_TimevalHostToNetwork(struct timeval *src, Timeval *dest)
 {
   dest->tv_nsec = htonl(src->tv_usec * 1000);
-  if (sizeof (time_t) > 4)
-    dest->tv_sec_high = htonl(src->tv_sec >> 16 >> 16);
-  else
-    dest->tv_sec_high = htonl(TV_NOHIGHSEC);
+#ifdef HAVE_LONG_TIME_T
+  dest->tv_sec_high = htonl((uint64_t)src->tv_sec >> 32);
+#else
+  dest->tv_sec_high = htonl(TV_NOHIGHSEC);
+#endif
   dest->tv_sec_low = htonl(src->tv_sec);
 }
 

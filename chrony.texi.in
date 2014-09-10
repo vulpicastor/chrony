@@ -873,9 +873,9 @@ For the @file{@SYSCONFDIR@/chrony.conf} file, the following can be used as an
 example.
 
 @example
-server 0.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 1.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
-server 2.pool.ntp.org minpoll 5 maxpoll 10 maxdelay 0.4 offline
+server 0.pool.ntp.org maxdelay 0.4 offline
+server 1.pool.ntp.org maxdelay 0.4 offline
+server 2.pool.ntp.org maxdelay 0.4 offline
 logdir /var/log/chrony
 log statistics measurements tracking
 driftfile @CHRONYVARDIR@/drift
@@ -1007,7 +1007,7 @@ used.
 When this option is used, the @code{initstepslew} directive and the
 @code{makestep} directive used with a positive limit will be ignored.
 This option is useful when restarting @code{chronyd} and can be used
-in conjuction with the `-r' option.
+in conjunction with the `-r' option.
 
 @item -s
 This option will set the system clock from the computer's real-time
@@ -1018,18 +1018,20 @@ Support for real-time clocks is limited at present - the criteria are
 described in the section on the @code{rtcfile} directive (@pxref{rtcfile
 directive}).
 
-If @code{chronyd} cannot support the real time clock on your computer,
-this option cannot be used and a warning message will be logged to the
-syslog.
-
 If used in conjunction with the `-r' flag, @code{chronyd} will attempt
 to preserve the old samples after setting the system clock from the real
-time clock.  This can be used to allow @code{chronyd} to perform long
+time clock (RTC).  This can be used to allow @code{chronyd} to perform long
 term averaging of the gain or loss rate across system reboots, and is
 useful for dial-up systems that are shut down when not in use.  For this
 to work well, it relies on @code{chronyd} having been able to determine
-accurate statistics for the difference between the real time clock and
+accurate statistics for the difference between the RTC and
 system clock last time the computer was on.
+
+If @code{chronyd} doesn't support the RTC on your computer or there is no RTC
+installed, the system clock will be set with this option forward to the time of
+the last modification of the drift file (specified by the @code{driftfile}
+directive) to restore the system time at which @code{chronyd} was previously
+stopped.
 @item -u <user>
 This option sets the name of the user to which will @code{chronyd} switch to
 drop root privileges if compiled with Linux capabilities support (default
@@ -1112,7 +1114,8 @@ specified with a command line option.
 
 Each command in the configuration file is placed on a separate line.
 The following sections describe each of the commands in turn.  The
-directives can occur in any order in the file.
+directives can occur in any order in the file and they are not
+case-sensitive.
 
 The configuration commands can also be specified directly on the
 @code{chronyd} command line, each argument is parsed as a line and
@@ -1199,7 +1202,8 @@ By default, @code{chronyd} uses a separate client socket for each configured
 server and their source port is chosen arbitrarily by the operating system.
 However, you can use the @code{acquisitionport} directive to explicitly specify
 a port and use only one socket (per IPv4/IPv6 address family) for all
-configured servers.  This may be useful for getting through firewalls.
+configured servers.  This may be useful for getting through firewalls.  If set
+to 0, the source port of the socket will be chosen arbitrarily.
 
 It may be set to the same port as used by the NTP server (@pxref{port
 directive}) to use only one socket for all NTP packets.
@@ -2835,18 +2839,18 @@ of the machines.
 
 In order to avoid this problem, the @code{presend} option may be used.
 It takes a single integer argument, which is the smallest polling
-interval for which a pair of packets will be exchanged between the
-client and the server prior to the actual measurement being initiated by
-the client.  For example, with the following option included in a
+interval for which an extra pair of NTP packets will be exchanged
+between the client and the server prior to the actual measurement.
+For example, with the following option included in a
 @code{server} directive :
 
 @example
 presend 9
 @end example
 
-when the polling interval is 512 seconds or more, a UDP echo datagram
-will be sent to the server a short time (currently 4 seconds) before the
-NTP client mode datagram.
+when the polling interval is 512 seconds or more, an extra NTP client
+packet will be sent to the server a short time (currently 4 seconds)
+before making the actual measurement.
 
 @item key
 The NTP protocol supports the inclusion of checksums in the packets, to
@@ -4619,6 +4623,49 @@ bindcmdaddress ::1
 
 If you don't need to use @code{chronyc} at all, you can disable the command
 sockets by adding @code{cmdport 0} to the configuration file.
+
+On Linux, if @code{chronyd} is compiled with support for Linux capabilities
+(available in the libcap library), you can specify an unprivileged user with
+the `-u' option or @code{user} directive in the @file{chrony.conf} file to drop
+root privileges after start.  The configure option @code{--with-user} can be
+used to drop the privileges by default.
+
+@subsection How can I improve the accuracy of the system clock with NTP sources?
+Select NTP servers that are well synchronised, stable and close to your network.
+It's better to use more than one server, three or four is usually recommended as
+the minimum, so @code{chronyd} can detect falsetickers and combine measurements
+from multiple sources.
+
+There are also useful options which can be set in the @code{server} directive,
+they are @code{minpoll}, @code{maxpoll}, @code{polltarget}, @code{maxdelay},
+@code{maxdelayratio} and @code{maxdelaydevratio}.
+
+The first three options set the minimum and maximum allowed polling interval,
+and how should be the actual interval adjusted in the specified range.  Their
+default values are suitable for public NTP servers, which normally don't allow
+too frequent polling, but if you run your own NTP servers or have permission to
+poll the servers frequently, setting the options for shorter polling intervals
+may significantly improve the accuracy of the system clock.
+
+The optimal polling interval depends on many factors, this includes the ratio
+between the wander of the clock and the network jitter (sometimes expressed in
+NTP documents as the Allan intercept), the temperature sensitivity of the
+crystal oscillator and the maximum rate of change of the temperature.  An
+example of the directive for a server located in the same LAN could be
+
+@example
+server ntp.local minpoll 2 maxpoll 4 polltarget 30
+@end example
+
+The maxdelay options are useful to ignore measurements with larger delay (e.g.
+due to congestion in the network) and improve the stability of the
+synchronisation.  The @code{maxdelaydevratio} option could be added to the
+previous example
+
+@example
+server ntp.local minpoll 2 maxpoll 4 polltarget 30 maxdelaydevratio 2
+@end example
+
 @c }}}
 @c {{{ S:Computer is not synchronising
 @node Computer is not synchronising
