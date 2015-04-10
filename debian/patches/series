@@ -2,3 +2,6 @@
 03_recreate-always-getdate-c.patch
 04_do-not-look-for-ncurses.patch
 05_disable-installation-of-license.patch
+11_protect-authenticated-symmetric-ass.patch
+12_fix-subnet-size-indivisible-by-four.patch
+13_fix-initialization-of-allocated-reply-slots.patch
