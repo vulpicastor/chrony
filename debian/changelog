@@ -1,3 +1,18 @@
+chrony (1.30-2) unstable; urgency=medium
+
+  * With the following security bugfixes (Closes: #782160):
+    - Fix CVE-2015-1853: Protect authenticated symmetric NTP
+                         associations against DoS attacks.
+    - Fix CVE-2015-1821: Fix access configuration with subnet
+                         size indivisible by 4.
+    - Fix CVE-2015-1822: Fix initialization of reply slots for
+                         authenticated commands.
+  * debian/control:
+   - Update e-mail address of myself.
+   - Add Vincent Blut as co-maintainer.
+
+ -- Joachim Wiedorn <joodebian@joonet.de>  Fri, 10 Apr 2015 11:41:31 +0200
+
 chrony (1.30-1) unstable; urgency=medium
 
   * New upstream release with following bugfixes:
