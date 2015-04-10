@@ -1,7 +1,8 @@
 Source: chrony
 Section: admin
 Priority: extra
-Maintainer: Joachim Wiedorn <ad_debian@joonet.de>
+Maintainer: Joachim Wiedorn <joodebian@joonet.de>
+Uploaders: Vincent Blut <vincent.debian@free.fr>
 Standards-Version: 3.9.5
 Build-Depends: debhelper (>= 9),
  texinfo, bison,
