@@ -3,7 +3,7 @@ Section: net
 Priority: optional
 Maintainer: Joachim Wiedorn <joodebian@joonet.de>
 Uploaders: Vincent Blut <vincent.debian@free.fr>
-Standards-Version: 3.9.5
+Standards-Version: 3.9.6
 Build-Depends: debhelper (>= 9),
  texinfo, bison,
  libedit-dev,
