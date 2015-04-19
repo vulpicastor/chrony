@@ -1,6 +1,6 @@
 Source: chrony
 Section: net
-Priority: extra
+Priority: optional
 Maintainer: Joachim Wiedorn <joodebian@joonet.de>
 Uploaders: Vincent Blut <vincent.debian@free.fr>
 Standards-Version: 3.9.5
