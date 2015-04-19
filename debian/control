@@ -1,5 +1,5 @@
 Source: chrony
-Section: admin
+Section: net
 Priority: extra
 Maintainer: Joachim Wiedorn <joodebian@joonet.de>
 Uploaders: Vincent Blut <vincent.debian@free.fr>
