@@ -25,7 +25,7 @@ Depends: ${misc:Depends},
 Recommends: udev (>= 0.124-1)
 Conflicts: time-daemon, ntp
 Provides: time-daemon
-Replaces: time-daemon
+Replaces: time-daemon, ntp
 Description: Set the computer clock from time servers on the Net
  It consists of a pair of programs:
  .
