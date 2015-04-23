@@ -8,10 +8,6 @@
 	sharedscripts
 	create 644
 	postrotate
-		PASSWORD=`awk '$1 ~ /^1$/ {print $2; exit}' /etc/chrony/chrony.keys`
-		cat << EOF | /usr/bin/chronyc | sed '/^200 OK$/d'
-		password $PASSWORD
-		cyclelogs
-		EOF
+		/usr/bin/chronyc -a cyclelogs > /dev/null 2>&1 || true
 	endscript
 }
