@@ -1,8 +1,8 @@
 Source: chrony
 Section: net
 Priority: optional
-Maintainer: Joachim Wiedorn <joodebian@joonet.de>
-Uploaders: Vincent Blut <vincent.debian@free.fr>
+Maintainer: Vincent Blut <vincent.debian@free.fr>
+Uploaders: Joachim Wiedorn <joodebian@joonet.de>
 Standards-Version: 3.9.6
 Build-Depends: debhelper (>= 9),
  texinfo, bison,
