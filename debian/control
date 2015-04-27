@@ -12,7 +12,7 @@ Build-Depends: debhelper (>= 9),
  libcap-dev
 Homepage: http://chrony.tuxfamily.org
 Vcs-Git: git://anonscm.debian.org/collab-maint/chrony.git
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/chrony.git
+Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/chrony.git
 
 Package: chrony
 Architecture: linux-any
