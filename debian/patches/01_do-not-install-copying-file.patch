@@ -1,8 +1,8 @@
 Package:     chrony
-Subject:     disable installation of license
-Author:      Joachim Wiedorn <ad_debian at joonet.de>
+Subject:     disable installation of copying file
+Author:      Joachim Wiedorn <joodebian at joonet.de>
 Forwarded:   no
-Last-Update: 2013-11-22
+Last-Update: 2014-10-24
 
 For Debian the file COPYING is not needed. The right
 license does exist at the system.
