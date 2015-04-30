@@ -1,2 +1,3 @@
 config.h
 config.log
+getdate.c
