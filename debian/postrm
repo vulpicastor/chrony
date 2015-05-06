@@ -18,8 +18,6 @@ case "$1" in
         rm -rf /etc/chrony
         rm -rf /var/lib/chrony
         rm -rf /var/log/chrony
-        rm -f /etc/apm/event.d/01chrony
-        rm -f /etc/ppp/ip-{down,up}.d/chrony
     ;;
 
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
