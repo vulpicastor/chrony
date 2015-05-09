@@ -27,7 +27,7 @@ Recommends: udev (>= 0.124-1)
 Conflicts: time-daemon, ntp
 Provides: time-daemon
 Replaces: time-daemon, ntp
-Description: Set the computer clock from time servers on the Net
+Description: Versatile implementation of the Network Time Protocol
  It consists of a pair of programs:
  .
  chronyd:  This is a daemon which runs in background on the system.
