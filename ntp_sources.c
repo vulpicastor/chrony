@@ -31,6 +31,7 @@
 
 #include "sysincl.h"
 
+#include "array.h"
 #include "ntp_sources.h"
 #include "ntp_core.h"
 #include "util.h"
@@ -48,19 +49,18 @@ typedef struct {
   NTP_Remote_Address *remote_addr; /* The address of this source, non-NULL
                                       means this slot in table is in use */
   NCR_Instance data;            /* Data for the protocol engine for this source */
+  int pool;                     /* Number of the pool from which was this source
+                                   added or INVALID_POOL */
+  int tentative;                /* Flag indicating there was no valid response
+                                   yet and the source may be removed if other
+                                   sources from the pool respond first */
 } SourceRecord;
 
-#define N_RECORDS 256
+/* Hash table of SourceRecord, the size should be a power of two */
+static ARR_Instance records;
 
-/* Fixed size table, because we use a hard coded hash algorithm.  It
-   is rather unlikely we would have anything approaching this number
-   of sources. */
-static SourceRecord records[N_RECORDS];
-
+/* Number of sources in the hash table */
 static int n_sources;
-
-/* The largest number of sources we want to have stored in the hash table */
-#define MAX_SOURCES 64
 
 /* Flag indicating new sources will be started automatically when added */
 static int auto_start_sources = 0;
@@ -69,8 +69,16 @@ static int auto_start_sources = 0;
 struct UnresolvedSource {
   char *name;
   int port;
-  NTP_Source_Type type;
-  SourceParameters params;
+  int replacement;
+  union {
+    struct {
+      NTP_Source_Type type;
+      SourceParameters params;
+      int pool;
+      int max_new_sources;
+    } new_source;
+    NTP_Remote_Address replace_source;
+  };
   struct UnresolvedSource *next;
 };
 
@@ -84,10 +92,29 @@ static SCH_TimeoutID resolving_id;
 static struct UnresolvedSource *resolving_source = NULL;
 static NSR_SourceResolvingEndHandler resolving_end_handler = NULL;
 
+#define MIN_POOL_RESOLVE_INTERVAL 5
+#define MAX_POOL_SOURCES 16
+#define INVALID_POOL (-1)
+
+/* Pool of sources, the name is expected to resolve to multiple addresses
+   which change over time */
+struct SourcePool {
+  char *name;
+  int port;
+  /* Number of sources added from this pool (ignoring tentative sources) */
+  int sources;
+  /* Maximum number of sources */
+  int max_sources;
+};
+
+/* Array of SourcePool */
+static ARR_Instance pools;
+
 /* ================================================== */
 /* Forward prototypes */
 
 static void resolve_sources(void *arg);
+static void rehash_records(void);
 
 static void
 slew_sources(struct timeval *raw,
@@ -104,15 +131,24 @@ static int initialised = 0;
 
 /* ================================================== */
 
+static SourceRecord *
+get_record(unsigned index)
+{
+  return (SourceRecord *)ARR_GetElement(records, index);
+}
+
+/* ================================================== */
+
 void
 NSR_Initialise(void)
 {
-  int i;
-  for (i=0; i<N_RECORDS; i++) {
-    records[i].remote_addr = NULL;
-  }
   n_sources = 0;
   initialised = 1;
+
+  records = ARR_CreateInstance(sizeof (SourceRecord));
+  rehash_records();
+
+  pools = ARR_CreateInstance(sizeof (struct SourcePool));
 
   LCL_AddParameterChangeHandler(slew_sources, NULL);
 }
@@ -122,6 +158,31 @@ NSR_Initialise(void)
 void
 NSR_Finalise(void)
 {
+  SourceRecord *record;
+  struct UnresolvedSource *us;
+  unsigned int i;
+
+  for (i = 0; i < ARR_GetSize(pools); i++)
+    Free(((struct SourcePool *)ARR_GetElement(pools, i))->name);
+  ARR_DestroyInstance(pools);
+
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (!record->remote_addr)
+      continue;
+    record->remote_addr = NULL;
+    NCR_DestroyInstance(record->data);
+  }
+
+  ARR_DestroyInstance(records);
+
+  while (unresolved_sources) {
+    us = unresolved_sources;
+    unresolved_sources = us->next;
+    Free(us->name);
+    Free(us);
+  }
+
   initialised = 0;
 }
 
@@ -142,23 +203,24 @@ NSR_Finalise(void)
 static void
 find_slot(NTP_Remote_Address *remote_addr, int *slot, int *found)
 {
-  unsigned long hash;
-  unsigned long ip;
+  SourceRecord *record;
+  uint32_t hash;
+  unsigned int i, size;
   unsigned short port;
   uint8_t *ip6;
 
-  assert(N_RECORDS == 256);
+  size = ARR_GetSize(records);
   
   switch (remote_addr->ip_addr.family) {
     case IPADDR_INET6:
       ip6 = remote_addr->ip_addr.addr.in6;
-      ip = (ip6[0] ^ ip6[4] ^ ip6[8] ^ ip6[12]) |
+      hash = (ip6[0] ^ ip6[4] ^ ip6[8] ^ ip6[12]) |
            (ip6[1] ^ ip6[5] ^ ip6[9] ^ ip6[13]) << 8 |
            (ip6[2] ^ ip6[6] ^ ip6[10] ^ ip6[14]) << 16 |
            (ip6[3] ^ ip6[7] ^ ip6[11] ^ ip6[15]) << 24;
       break;
     case IPADDR_INET4:
-      ip = remote_addr->ip_addr.addr.in4;
+      hash = remote_addr->ip_addr.addr.in4;
       break;
     default:
       *found = *slot = 0;
@@ -166,36 +228,77 @@ find_slot(NTP_Remote_Address *remote_addr, int *slot, int *found)
   }
 
   port = remote_addr->port;
-  /* Compute hash value just by xor'ing the 4 bytes of the address together */
-  hash = ip ^ (ip >> 16);
-  hash = (hash ^ (hash >> 8)) & 0xff;
 
-  while (records[hash].remote_addr &&
-         UTI_CompareIPs(&records[hash].remote_addr->ip_addr,
-           &remote_addr->ip_addr, NULL)) {
-    hash++;
-    if (hash == 256) hash = 0;
-  }
+  for (i = 0; i < size / 2; i++) {
+    /* Use quadratic probing */
+    *slot = (hash + (i + i * i) / 2) % size;
+    record = get_record(*slot);
 
-  if (records[hash].remote_addr) {
-    if (records[hash].remote_addr->port == port) {
-      *found = 2;
-    } else {
-      *found = 1;
+    if (!record->remote_addr)
+      break;
+
+    if (!UTI_CompareIPs(&record->remote_addr->ip_addr,
+                        &remote_addr->ip_addr, NULL)) {
+      *found = record->remote_addr->port == port ? 2 : 1;
+      return;
     }
-    *slot = hash;
-  } else {
-    *found = 0;
-    *slot = hash;
   }
+
+  *found = 0;
+}
+
+/* ================================================== */
+
+/* Check if hash table of given size is sufficient to contain sources */
+static int
+check_hashtable_size(unsigned int sources, unsigned int size)
+{
+  return sources * 2 + 1 < size;
+}
+
+/* ================================================== */
+
+static void
+rehash_records(void)
+{
+  SourceRecord *temp_records;
+  unsigned int i, old_size, new_size;
+  int slot, found;
+
+  old_size = ARR_GetSize(records);
+
+  temp_records = MallocArray(SourceRecord, old_size);
+  memcpy(temp_records, ARR_GetElements(records), old_size * sizeof (SourceRecord));
+
+  /* The size of the hash table is always a power of two */
+  for (new_size = 4; !check_hashtable_size(n_sources, new_size); new_size *= 2)
+    ;
+
+  ARR_SetSize(records, new_size);
+
+  for (i = 0; i < new_size; i++)
+    get_record(i)->remote_addr = NULL;
+
+  for (i = 0; i < old_size; i++) {
+    if (!temp_records[i].remote_addr)
+      continue;
+
+    find_slot(temp_records[i].remote_addr, &slot, &found);
+    assert(!found);
+
+    *get_record(slot) = temp_records[i];
+  }
+
+  Free(temp_records);
 }
 
 /* ================================================== */
 
 /* Procedure to add a new source */
-NSR_Status
-NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParameters *params)
+static NSR_Status
+add_source(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParameters *params, int pool)
 {
+  SourceRecord *record;
   int slot, found;
 
   assert(initialised);
@@ -205,17 +308,27 @@ NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParam
   if (found) {
     return NSR_AlreadyInUse;
   } else {
-    if (n_sources == MAX_SOURCES) {
-      return NSR_TooManySources;
-    } else if (remote_addr->ip_addr.family != IPADDR_INET4 &&
+    if (remote_addr->ip_addr.family != IPADDR_INET4 &&
                remote_addr->ip_addr.family != IPADDR_INET6) {
       return NSR_InvalidAF;
     } else {
       n_sources++;
-      records[slot].data = NCR_GetInstance(remote_addr, type, params); /* Will need params passing through */
-      records[slot].remote_addr = NCR_GetRemoteAddress(records[slot].data);
+
+      if (!check_hashtable_size(n_sources, ARR_GetSize(records))) {
+        rehash_records();
+        find_slot(remote_addr, &slot, &found);
+      }
+
+      assert(!found);
+      record = get_record(slot);
+      record->data = NCR_GetInstance(remote_addr, type, params);
+      record->remote_addr = NCR_GetRemoteAddress(record->data);
+      record->pool = pool;
+      record->tentative = pool != INVALID_POOL ? 1 : 0;
+
       if (auto_start_sources)
-        NCR_StartInstance(records[slot].data);
+        NCR_StartInstance(record->data);
+
       return NSR_Success;
     }
   }
@@ -223,11 +336,68 @@ NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParam
 
 /* ================================================== */
 
+static NSR_Status
+replace_source(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr)
+{
+  int slot1, slot2, found;
+  SourceRecord *record;
+
+  find_slot(old_addr, &slot1, &found);
+  if (!found)
+    return NSR_NoSuchSource;
+
+  find_slot(new_addr, &slot2, &found);
+  if (found)
+    return NSR_AlreadyInUse;
+
+  record = get_record(slot1);
+  NCR_ChangeRemoteAddress(record->data, new_addr);
+  record->remote_addr = NCR_GetRemoteAddress(record->data);
+
+  /* The hash table must be rebuilt for the new address */
+  rehash_records();
+
+  LOG(LOGS_INFO, LOGF_NtpSources, "Source %s replaced with %s",
+      UTI_IPToString(&old_addr->ip_addr),
+      UTI_IPToString(&new_addr->ip_addr));
+
+  return NSR_Success;
+}
+
+/* ================================================== */
+
 static void
-name_resolve_handler(DNS_Status status, IPAddr *ip_addr, void *anything)
+process_resolved_name(struct UnresolvedSource *us, IPAddr *ip_addrs, int n_addrs)
+{
+  NTP_Remote_Address address;
+  int i, added;
+
+  for (i = added = 0; i < n_addrs; i++) {
+    DEBUG_LOG(LOGF_NtpSources, "%s resolved to %s", us->name, UTI_IPToString(&ip_addrs[i]));
+
+    address.ip_addr = ip_addrs[i];
+    address.port = us->port;
+
+    if (us->replacement) {
+      if (replace_source(&us->replace_source, &address) != NSR_AlreadyInUse)
+        break;
+    } else {
+      if (add_source(&address, us->new_source.type, &us->new_source.params,
+                     us->new_source.pool) == NSR_Success)
+        added++;
+
+      if (added >= us->new_source.max_new_sources)
+        break;
+    }
+  }
+}
+
+/* ================================================== */
+
+static void
+name_resolve_handler(DNS_Status status, int n_addrs, IPAddr *ip_addrs, void *anything)
 {
   struct UnresolvedSource *us, **i, *next;
-  NTP_Remote_Address address;
 
   us = (struct UnresolvedSource *)anything;
 
@@ -237,10 +407,7 @@ name_resolve_handler(DNS_Status status, IPAddr *ip_addr, void *anything)
     case DNS_TryAgain:
       break;
     case DNS_Success:
-      DEBUG_LOG(LOGF_NtpSources, "%s resolved to %s", us->name, UTI_IPToString(ip_addr));
-      address.ip_addr = *ip_addr;
-      address.port = us->port;
-      NSR_AddSource(&address, us->type, &us->params);
+      process_resolved_name(us, ip_addrs, n_addrs);
       break;
     case DNS_Failure:
       LOG(LOGS_WARN, LOGF_NtpSources, "Invalid host %s", us->name);
@@ -251,8 +418,9 @@ name_resolve_handler(DNS_Status status, IPAddr *ip_addr, void *anything)
 
   next = us->next;
 
-  if (status != DNS_TryAgain) {
-    /* Remove the source from the list */
+  /* Remove the source from the list on success or failure, replacements
+     are removed on any status */
+  if (us->replacement || status != DNS_TryAgain) {
     for (i = &unresolved_sources; *i; i = &(*i)->next) {
       if (*i == us) {
         *i = us->next;
@@ -311,24 +479,54 @@ resolve_sources(void *arg)
 
 /* ================================================== */
 
-/* Procedure to add a new server or peer source, but instead of an IP address
-   only a name is provided */
-void
-NSR_AddUnresolvedSource(char *name, int port, NTP_Source_Type type, SourceParameters *params)
+static void
+append_unresolved_source(struct UnresolvedSource *us)
 {
-  struct UnresolvedSource *us, **i;
-
-  us = MallocNew(struct UnresolvedSource);
-
-  us->name = name;
-  us->port = port;
-  us->type = type;
-  us->params = *params;
-  us->next = NULL;
+  struct UnresolvedSource **i;
 
   for (i = &unresolved_sources; *i; i = &(*i)->next)
     ;
   *i = us;
+  us->next = NULL;
+}
+
+/* ================================================== */
+
+NSR_Status
+NSR_AddSource(NTP_Remote_Address *remote_addr, NTP_Source_Type type, SourceParameters *params)
+{
+  return add_source(remote_addr, type, params, INVALID_POOL);
+}
+
+/* ================================================== */
+
+void
+NSR_AddSourceByName(char *name, int port, int pool, NTP_Source_Type type, SourceParameters *params)
+{
+  struct UnresolvedSource *us;
+  struct SourcePool *sp;
+
+  us = MallocNew(struct UnresolvedSource);
+  us->name = Strdup(name);
+  us->port = port;
+  us->replacement = 0;
+  us->new_source.type = type;
+  us->new_source.params = *params;
+
+  if (!pool) {
+    us->new_source.pool = INVALID_POOL;
+    us->new_source.max_new_sources = 1;
+  } else {
+    sp = (struct SourcePool *)ARR_GetNewElement(pools);
+    sp->name = Strdup(name);
+    sp->port = port;
+    sp->sources = 0;
+    sp->max_sources = params->max_sources;
+    us->new_source.pool = ARR_GetSize(pools) - 1;
+    us->new_source.max_new_sources = MAX_POOL_SOURCES;
+  }
+
+  append_unresolved_source(us);
 }
 
 /* ================================================== */
@@ -365,12 +563,12 @@ NSR_ResolveSources(void)
 
 void NSR_StartSources(void)
 {
-  int i;
+  unsigned int i;
 
-  for (i = 0; i < N_RECORDS; i++) {
-    if (!records[i].remote_addr)
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    if (!get_record(i)->remote_addr)
       continue;
-    NCR_StartInstance(records[i].data);
+    NCR_StartInstance(get_record(i)->data);
   }
 }
 
@@ -383,6 +581,18 @@ void NSR_AutoStartSources(void)
 
 /* ================================================== */
 
+static void
+clean_source_record(SourceRecord *record)
+{
+  assert(record->remote_addr);
+  record->remote_addr = NULL;
+  NCR_DestroyInstance(record->data);
+
+  n_sources--;
+}
+
+/* ================================================== */
+
 /* Procedure to remove a source.  We don't bother whether the port
    address is matched - we're only interested in removing a record for
    the right IP address.  Thus the caller can specify the port number
@@ -390,8 +600,7 @@ void NSR_AutoStartSources(void)
 NSR_Status
 NSR_RemoveSource(NTP_Remote_Address *remote_addr)
 {
-  int i, slot, found;
-  SourceRecord temp_records[N_RECORDS];
+  int slot, found;
 
   assert(initialised);
 
@@ -400,29 +609,12 @@ NSR_RemoveSource(NTP_Remote_Address *remote_addr)
     return NSR_NoSuchSource;
   }
 
-  n_sources--;
-  records[slot].remote_addr = NULL;
-  NCR_DestroyInstance(records[slot].data);
+  clean_source_record(get_record(slot));
 
   /* Rehash the table to make sure there are no broken probe sequences.
      This is costly, but it's not expected to happen frequently. */
 
-  memcpy(temp_records, records, sizeof (records));
-
-  for (i = 0; i < N_RECORDS; i++) {
-    records[i].remote_addr = NULL;
-  }
-  
-  for (i = 0; i < N_RECORDS; i++) {
-    if (!temp_records[i].remote_addr)
-      continue;
-
-    find_slot(temp_records[i].remote_addr, &slot, &found);
-    assert(!found);
-
-    records[slot].remote_addr = temp_records[i].remote_addr;
-    records[slot].data = temp_records[i].data;
-  }
+  rehash_records();
 
   return NSR_Success;
 }
@@ -432,31 +624,130 @@ NSR_RemoveSource(NTP_Remote_Address *remote_addr)
 void
 NSR_RemoveAllSources(void)
 {
-  int i;
+  SourceRecord *record;
+  unsigned int i;
 
-  for (i = 0; i < N_RECORDS; i++) {
-    if (!records[i].remote_addr)
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (!record->remote_addr)
       continue;
-    NCR_DestroyInstance(records[i].data);
-    records[i].remote_addr = NULL;
+    clean_source_record(record);
   }
+
+  rehash_records();
 }
 
 /* ================================================== */
+
+static void
+resolve_pool_replacement(struct SourcePool *sp, NTP_Remote_Address *addr)
+{
+  struct UnresolvedSource *us;
+
+  us = MallocNew(struct UnresolvedSource);
+  us->name = Strdup(sp->name);
+  us->port = sp->port;
+  us->replacement = 1;
+  us->replace_source = *addr;
+
+  append_unresolved_source(us);
+  NSR_ResolveSources();
+}
+
+/* ================================================== */
+
+void
+NSR_HandleBadSource(IPAddr *address)
+{
+  static struct timeval last_replacement;
+  struct timeval now;
+  NTP_Remote_Address remote_addr;
+  struct SourcePool *pool;
+  int pool_index, slot, found;
+  double diff;
+
+  remote_addr.ip_addr = *address;
+  remote_addr.port = 0;
+
+  /* Only sources from a pool can be replaced */
+  find_slot(&remote_addr, &slot, &found);
+  if (!found || (pool_index = get_record(slot)->pool) == INVALID_POOL)
+    return;
+
+  pool = (struct SourcePool *)ARR_GetElement(pools, pool_index);
+
+  /* Don't resolve the pool name too frequently */
+  SCH_GetLastEventTime(NULL, NULL, &now);
+  UTI_DiffTimevalsToDouble(&diff, &now, &last_replacement);
+  if (fabs(diff) < RESOLVE_INTERVAL_UNIT * (1 << MIN_POOL_RESOLVE_INTERVAL)) {
+    DEBUG_LOG(LOGF_NtpSources, "replacement postponed");
+    return;
+  }
+  last_replacement = now;
+
+  DEBUG_LOG(LOGF_NtpSources, "pool replacement for %s", UTI_IPToString(address));
+
+  resolve_pool_replacement(pool, &remote_addr);
+}
+
+/* ================================================== */
+
+static void remove_tentative_pool_sources(int pool)
+{
+  SourceRecord *record;
+  unsigned int i, removed;
+
+  for (i = removed = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+
+    if (!record->remote_addr || record->pool != pool || !record->tentative)
+      continue;
+
+    DEBUG_LOG(LOGF_NtpSources, "removing tentative source %s",
+              UTI_IPToString(&record->remote_addr->ip_addr));
+
+    clean_source_record(record);
+    removed++;
+  }
+
+  if (removed)
+    rehash_records();
+}
 
 /* This routine is called by ntp_io when a new packet arrives off the network,
    possibly with an authentication tail */
 void
 NSR_ProcessReceive(NTP_Packet *message, struct timeval *now, double now_err, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr, int length)
 {
+  SourceRecord *record;
+  struct SourcePool *pool;
   int slot, found;
 
   assert(initialised);
 
   find_slot(remote_addr, &slot, &found);
   if (found == 2) { /* Must match IP address AND port number */
-    NCR_ProcessKnown(message, now, now_err, records[slot].data,
-                     local_addr->sock_fd, length);
+    record = get_record(slot);
+
+    if (!NCR_ProcessKnown(message, now, now_err, record->data, local_addr, length))
+      return;
+
+    if (record->tentative) {
+      /* First reply from a pool source */
+      record->tentative = 0;
+
+      assert(record->pool != INVALID_POOL);
+      pool = (struct SourcePool *)ARR_GetElement(pools, record->pool);
+      pool->sources++;
+
+      DEBUG_LOG(LOGF_NtpSources, "pool %s has %d confirmed sources",
+                pool->name, pool->sources);
+
+      /* If the number of sources reached the configured maximum, remove
+         the tentative sources added from this pool */
+      if (pool->sources >= pool->max_sources)
+        remove_tentative_pool_sources(record->pool);
+    }
   } else {
     NCR_ProcessUnknown(message, now, now_err, remote_addr, local_addr, length);
   }
@@ -472,14 +763,16 @@ slew_sources(struct timeval *raw,
              LCL_ChangeType change_type,
              void *anything)
 {
-  int i;
+  SourceRecord *record;
+  unsigned int i;
 
-  for (i=0; i<N_RECORDS; i++) {
-    if (records[i].remote_addr) {
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (record->remote_addr) {
       if (change_type == LCL_ChangeUnknownStep) {
-        NCR_ResetInstance(records[i].data);
+        NCR_ResetInstance(record->data);
       } else {
-        NCR_SlewTimes(records[i].data, cooked, dfreq, doffset);
+        NCR_SlewTimes(record->data, cooked, dfreq, doffset);
       }
     }
   }
@@ -490,18 +783,20 @@ slew_sources(struct timeval *raw,
 int
 NSR_TakeSourcesOnline(IPAddr *mask, IPAddr *address)
 {
-  int i;
+  SourceRecord *record;
+  unsigned int i;
   int any;
 
   NSR_ResolveSources();
 
   any = 0;
-  for (i=0; i<N_RECORDS; i++) {
-    if (records[i].remote_addr) {
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (record->remote_addr) {
       if (address->family == IPADDR_UNSPEC ||
-          !UTI_CompareIPs(&records[i].remote_addr->ip_addr, address, mask)) {
+          !UTI_CompareIPs(&record->remote_addr->ip_addr, address, mask)) {
         any = 1;
-        NCR_TakeSourceOnline(records[i].data);
+        NCR_TakeSourceOnline(record->data);
       }
     }
   }
@@ -510,8 +805,10 @@ NSR_TakeSourcesOnline(IPAddr *mask, IPAddr *address)
     struct UnresolvedSource *us;
 
     for (us = unresolved_sources; us; us = us->next) {
+      if (us->replacement)
+        continue;
       any = 1;
-      us->params.online = 1;
+      us->new_source.params.online = 1;
     }
   }
 
@@ -523,35 +820,39 @@ NSR_TakeSourcesOnline(IPAddr *mask, IPAddr *address)
 int
 NSR_TakeSourcesOffline(IPAddr *mask, IPAddr *address)
 {
-  int i, any, syncpeer;
+  SourceRecord *record, *syncpeer;
+  unsigned int i, any;
 
   any = 0;
-  syncpeer = -1;
-  for (i=0; i<N_RECORDS; i++) {
-    if (records[i].remote_addr) {
+  syncpeer = NULL;
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (record->remote_addr) {
       if (address->family == IPADDR_UNSPEC ||
-          !UTI_CompareIPs(&records[i].remote_addr->ip_addr, address, mask)) {
+          !UTI_CompareIPs(&record->remote_addr->ip_addr, address, mask)) {
         any = 1;
-        if (NCR_IsSyncPeer(records[i].data)) {
-          syncpeer = i;
+        if (NCR_IsSyncPeer(record->data)) {
+          syncpeer = record;
           continue;
         }
-        NCR_TakeSourceOffline(records[i].data);
+        NCR_TakeSourceOffline(record->data);
       }
     }
   }
 
   /* Take sync peer offline as last to avoid reference switching */
-  if (syncpeer >= 0) {
-    NCR_TakeSourceOffline(records[syncpeer].data);
+  if (syncpeer) {
+    NCR_TakeSourceOffline(syncpeer->data);
   }
 
   if (address->family == IPADDR_UNSPEC) {
     struct UnresolvedSource *us;
 
     for (us = unresolved_sources; us; us = us->next) {
+      if (us->replacement)
+        continue;
       any = 1;
-      us->params.online = 0;
+      us->new_source.params.online = 0;
     }
   }
 
@@ -572,7 +873,7 @@ NSR_ModifyMinpoll(IPAddr *address, int new_minpoll)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMinpoll(records[slot].data, new_minpoll);
+    NCR_ModifyMinpoll(get_record(slot)->data, new_minpoll);
     return 1;
   }
 }
@@ -591,7 +892,7 @@ NSR_ModifyMaxpoll(IPAddr *address, int new_maxpoll)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMaxpoll(records[slot].data, new_maxpoll);
+    NCR_ModifyMaxpoll(get_record(slot)->data, new_maxpoll);
     return 1;
   }
 }
@@ -610,7 +911,7 @@ NSR_ModifyMaxdelay(IPAddr *address, double new_max_delay)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMaxdelay(records[slot].data, new_max_delay);
+    NCR_ModifyMaxdelay(get_record(slot)->data, new_max_delay);
     return 1;
   }
 }
@@ -629,7 +930,7 @@ NSR_ModifyMaxdelayratio(IPAddr *address, double new_max_delay_ratio)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMaxdelayratio(records[slot].data, new_max_delay_ratio);
+    NCR_ModifyMaxdelayratio(get_record(slot)->data, new_max_delay_ratio);
     return 1;
   }
 }
@@ -648,7 +949,7 @@ NSR_ModifyMaxdelaydevratio(IPAddr *address, double new_max_delay_dev_ratio)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMaxdelaydevratio(records[slot].data, new_max_delay_dev_ratio);
+    NCR_ModifyMaxdelaydevratio(get_record(slot)->data, new_max_delay_dev_ratio);
     return 1;
   }
 }
@@ -667,7 +968,7 @@ NSR_ModifyMinstratum(IPAddr *address, int new_min_stratum)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyMinstratum(records[slot].data, new_min_stratum);
+    NCR_ModifyMinstratum(get_record(slot)->data, new_min_stratum);
     return 1;
   }
 }
@@ -686,7 +987,7 @@ NSR_ModifyPolltarget(IPAddr *address, int new_poll_target)
   if (found == 0) {
     return 0;
   } else {
-    NCR_ModifyPolltarget(records[slot].data, new_poll_target);
+    NCR_ModifyPolltarget(get_record(slot)->data, new_poll_target);
     return 1;
   }
 }
@@ -697,16 +998,18 @@ int
 NSR_InitiateSampleBurst(int n_good_samples, int n_total_samples,
                         IPAddr *mask, IPAddr *address)
 {
-  int i;
+  SourceRecord *record;
+  unsigned int i;
   int any;
 
   any = 0;
-  for (i=0; i<N_RECORDS; i++) {
-    if (records[i].remote_addr) {
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (record->remote_addr) {
       if (address->family == IPADDR_UNSPEC ||
-          !UTI_CompareIPs(&records[i].remote_addr->ip_addr, address, mask)) {
+          !UTI_CompareIPs(&record->remote_addr->ip_addr, address, mask)) {
         any = 1;
-        NCR_InitiateSampleBurst(records[i].data, n_good_samples, n_total_samples);
+        NCR_InitiateSampleBurst(record->data, n_good_samples, n_total_samples);
       }
     }
   }
@@ -729,7 +1032,7 @@ NSR_ReportSource(RPT_SourceReport *report, struct timeval *now)
   rem_addr.port = 0;
   find_slot(&rem_addr, &slot, &found);
   if (found) {
-    NCR_ReportSource(records[slot].data, report, now);
+    NCR_ReportSource(get_record(slot)->data, report, now);
   } else {
     report->poll = 0;
     report->latest_meas_ago = 0;
@@ -741,7 +1044,8 @@ NSR_ReportSource(RPT_SourceReport *report, struct timeval *now)
 void
 NSR_GetActivityReport(RPT_ActivityReport *report)
 {
-  int i;
+  SourceRecord *record;
+  unsigned int i;
   struct UnresolvedSource *us;
 
   report->online = 0;
@@ -749,9 +1053,10 @@ NSR_GetActivityReport(RPT_ActivityReport *report)
   report->burst_online = 0;
   report->burst_offline = 0;
 
-  for (i=0; i<N_RECORDS; i++) {
-    if (records[i].remote_addr) {
-      NCR_IncrementActivityCounters(records[i].data, &report->online, &report->offline,
+  for (i = 0; i < ARR_GetSize(records); i++) {
+    record = get_record(i);
+    if (record->remote_addr) {
+      NCR_IncrementActivityCounters(record->data, &report->online, &report->offline,
                                     &report->burst_online, &report->burst_offline);
     }
   }

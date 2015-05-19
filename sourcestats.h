@@ -38,13 +38,16 @@ extern void SST_Initialise(void);
 extern void SST_Finalise(void);
 
 /* This function creates a new instance of the statistics handler */
-extern SST_Stats SST_CreateInstance(uint32_t refid, IPAddr *addr);
+extern SST_Stats SST_CreateInstance(uint32_t refid, IPAddr *addr, int min_samples, int max_samples);
 
 /* This function deletes an instance of the statistics handler. */
 extern void SST_DeleteInstance(SST_Stats inst);
 
 /* This function resets an instance */
 extern void SST_ResetInstance(SST_Stats inst);
+
+/* This function changes the reference ID and IP address */
+extern void SST_SetRefid(SST_Stats inst, uint32_t refid, IPAddr *addr);
 
 /* This function accumulates a single sample into the statistics handler
 
@@ -54,10 +57,6 @@ extern void SST_ResetInstance(SST_Stats inst);
    offset is the offset of the local clock relative to the source in
    seconds.  Positive indicates that the local clock if FAST (contrary
    to the NTP parts of the software)
-
-   root_distance is the Lambda+Delta/2 term in RFC1305, but excluding
-   the extra dispersion due to the residual standard deviation after
-   we have done the regression fit.
 
    stratum is the stratum of the source from which the sample came.
   */
@@ -83,7 +82,10 @@ SST_GetSelectionData(SST_Stats inst, struct timeval *now,
                      double *offset_lo_limit,
                      double *offset_hi_limit,
                      double *root_distance,
-                     double *variance, int *select_ok);
+                     double *variance,
+                     double *first_sample_ago,
+                     double *last_sample_ago,
+                     int *select_ok);
 
 /* Get data needed when setting up tracking on this source */
 extern void
@@ -134,14 +136,6 @@ extern int SST_LoadFromFile(SST_Stats inst, FILE *in);
 extern void SST_DoSourceReport(SST_Stats inst, RPT_SourceReport *report, struct timeval *now);
 
 extern void SST_DoSourcestatsReport(SST_Stats inst, RPT_SourcestatsReport *report, struct timeval *now);
-
-typedef enum {
-  SST_Skew_Decrease,
-  SST_Skew_Nochange,
-  SST_Skew_Increase
-} SST_Skew_Direction;
-
-extern SST_Skew_Direction SST_LastSkewChange(SST_Stats inst);
 
 extern int SST_Samples(SST_Stats inst);
 

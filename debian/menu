@@ -1,3 +1,0 @@
-?package(chrony):needs="text" section="Applications/System/Administration"\
-  title="chronyc"\
-  command="/usr/bin/chronyc"

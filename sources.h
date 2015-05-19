@@ -65,7 +65,7 @@ typedef enum {
 /* Function to create a new instance.  This would be called by one of
    the individual source-type instance creation routines. */
 
-extern SRC_Instance SRC_CreateNewInstance(uint32_t ref_id, SRC_Type type, SRC_SelectOption sel_option, IPAddr *addr);
+extern SRC_Instance SRC_CreateNewInstance(uint32_t ref_id, SRC_Type type, SRC_SelectOption sel_option, IPAddr *addr, int min_samples, int max_samples);
 
 /* Function to get rid of a source when it is being unconfigured.
    This may cause the current reference source to be reselected, if this
@@ -74,6 +74,11 @@ extern SRC_Instance SRC_CreateNewInstance(uint32_t ref_id, SRC_Type type, SRC_Se
 
 extern void SRC_DestroyInstance(SRC_Instance instance);
 
+/* Function to reset a source */
+extern void SRC_ResetInstance(SRC_Instance instance);
+
+/* Function to change the sources's reference ID and IP address */
+extern void SRC_SetRefid(SRC_Instance instance, uint32_t ref_id, IPAddr *addr);
 
 /* Function to get the range of frequencies, relative to the given
    source, that we believe the local clock lies within.  The return
@@ -104,7 +109,7 @@ extern void SRC_GetFrequencyRange(SRC_Instance instance, double *lo, double *hi)
    indicates that the local clock is FAST relative to it.
 
    root_delay and root_dispersion are in seconds, and are as per
-   RFC1305.  root_dispersion only includes the peer's root dispersion
+   RFC 5905.  root_dispersion only includes the peer's root dispersion
    + local sampling precision + skew dispersion accrued during the
    measurement.  It is the job of the source statistics algorithms +
    track.c to add on the extra dispersion due to the residual standard
@@ -124,14 +129,6 @@ extern void SRC_SetActive(SRC_Instance inst);
 /* This routine sets the source as not receiving reachability updates */
 extern void SRC_UnsetActive(SRC_Instance inst);
 
-/* This routine indicates that packets with valid headers are being
-   received from the designated source */
-extern void SRC_SetSelectable(SRC_Instance instance);
-
-/* This routine indicates that we are no longer receiving packets with
-   valid headers from the designated source */
-extern void SRC_UnsetSelectable(SRC_Instance instance);
-
 /* This routine updates the reachability register */
 extern void SRC_UpdateReachability(SRC_Instance inst, int reachable);
 
@@ -140,11 +137,11 @@ extern void SRC_ResetReachability(SRC_Instance inst);
 
 /* This routine is used to select the best source from amongst those
    we currently have valid data on, and use it as the tracking base
-   for the local time.  Updates are only made to the local reference
-   if a new source is selected or updated_inst is the selected
-   reference source. (This avoids updating the frequency
+   for the local time.  Updates are made to the local reference only
+   when the selected source was updated (set as updated_inst) since
+   the last reference update.  This avoids updating the frequency
    tracking for every sample from other sources - only the ones from
-   the selected reference make a difference) */
+   the selected reference make a difference. */
 extern void SRC_SelectSource(SRC_Instance updated_inst);
 
 /* Force reselecting the best source */
@@ -179,14 +176,6 @@ extern int SRC_ReportSource(int index, RPT_SourceReport *report, struct timeval 
 extern int SRC_ReportSourcestats(int index, RPT_SourcestatsReport *report, struct timeval *now);
 
 extern SRC_Type SRC_GetType(int index);
-
-typedef enum {
-  SRC_Skew_Decrease,
-  SRC_Skew_Nochange,
-  SRC_Skew_Increase
-} SRC_Skew_Direction;
-
-extern SRC_Skew_Direction SRC_LastSkewChange(SRC_Instance inst);
 
 extern int SRC_Samples(SRC_Instance inst);
 

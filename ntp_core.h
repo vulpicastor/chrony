@@ -58,9 +58,12 @@ extern void NCR_StartInstance(NCR_Instance instance);
 /* Reset an instance */
 extern void NCR_ResetInstance(NCR_Instance inst);
 
+/* Change the remote address of an instance */
+extern void NCR_ChangeRemoteAddress(NCR_Instance inst, NTP_Remote_Address *remote_addr);
+
 /* This routine is called when a new packet arrives off the network,
    and it relates to a source we have an ongoing protocol exchange with */
-extern void NCR_ProcessKnown(NTP_Packet *message, struct timeval *now, double now_err, NCR_Instance data, int sock_fd, int length);
+extern int NCR_ProcessKnown(NTP_Packet *message, struct timeval *now, double now_err, NCR_Instance data, NTP_Local_Address *local_addr, int length);
 
 /* This routine is called when a new packet arrives off the network,
    and we do not recognize its source */
@@ -103,5 +106,7 @@ extern void NCR_IncrementActivityCounters(NCR_Instance inst, int *online, int *o
 extern NTP_Remote_Address *NCR_GetRemoteAddress(NCR_Instance instance);
 
 extern int NCR_IsSyncPeer(NCR_Instance instance);
+
+extern void NCR_AddBroadcastDestination(IPAddr *addr, unsigned short port, int interval);
 
 #endif /* GOT_NTP_CORE_H */

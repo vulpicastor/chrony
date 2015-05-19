@@ -1,6 +1,0 @@
-etc/chrony
-etc/ppp/ip-up.d
-etc/ppp/ip-down.d
-etc/apm/event.d
-var/log/chrony
-var/lib/chrony

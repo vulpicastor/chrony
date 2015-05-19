@@ -27,11 +27,15 @@
 #ifndef GOT_MEMORY_H
 #define GOT_MEMORY_H
 
-#define Malloc(x) malloc(x)
-#define MallocNew(T) ((T *) malloc(sizeof(T)))
-#define MallocArray(T, n) ((T *) malloc((n) * sizeof(T)))
-#define Realloc(x,y) realloc(x,y)
-#define ReallocArray(T,n,x) ((T *) realloc((void *)(x), (n)*sizeof(T)))
+/* Wrappers checking for errors */
+extern void *Malloc(size_t size);
+extern void *Realloc(void *ptr, size_t size);
+extern char *Strdup(const char *s);
+
+/* Convenient macros */
+#define MallocNew(T) ((T *) Malloc(sizeof(T)))
+#define MallocArray(T, n) ((T *) Malloc((n) * sizeof(T)))
+#define ReallocArray(T,n,x) ((T *) Realloc((void *)(x), (n)*sizeof(T)))
 #define Free(x) free(x)
 
 #endif /* GOT_MEMORY_H */

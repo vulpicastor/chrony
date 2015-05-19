@@ -82,14 +82,14 @@ location of the file called 'dir'.  This will typically be
 
    Now that the software is successfully installed, the next step is to
 set up a configuration file.  The default location of the file is
-'/etc/chrony.conf'.  Suppose you want to use public NTP servers from the
-pool.ntp.org project as your time reference.  A minimal useful
-configuration file could be
+'/etc/chrony.conf'.  Several examples of configuration with comments are
+included in the examples directory.  Suppose you want to use public NTP
+servers from the pool.ntp.org project as your time reference.  A minimal
+useful configuration file could be
 
-     server 0.pool.ntp.org iburst
-     server 1.pool.ntp.org iburst
-     server 2.pool.ntp.org iburst
+     pool pool.ntp.org iburst
      makestep 10 3
+     rtcsync
 
    Then, 'chronyd' can be run.
 

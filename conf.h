@@ -29,8 +29,10 @@
 #define GOT_CONF_H
 
 #include "addressing.h"
+#include "reference.h"
 
-extern void CNF_SetRestarted(int);
+extern void CNF_Initialise(int restarted);
+extern void CNF_Finalise(void);
 
 extern char *CNF_GetRtcDevice(void);
 
@@ -56,7 +58,7 @@ extern int CNF_GetLogRefclocks(void);
 extern int CNF_GetLogTempComp(void);
 extern char *CNF_GetKeysFile(void);
 extern char *CNF_GetRtcFile(void);
-extern unsigned long CNF_GetCommandKey(void);
+extern uint32_t CNF_GetCommandKey(void);
 extern int CNF_GetGenerateCommandKey(void);
 extern int CNF_GetDumpOnExit(void);
 extern int CNF_GetManualEnabled(void);
@@ -74,6 +76,7 @@ extern void CNF_GetBindAddress(int family, IPAddr *addr);
 extern void CNF_GetBindAcquisitionAddress(int family, IPAddr *addr);
 extern void CNF_GetBindCommandAddress(int family, IPAddr *addr);
 extern char *CNF_GetPidFile(void);
+extern REF_LeapMode CNF_GetLeapSecMode(void);
 extern char *CNF_GetLeapSecTimezone(void);
 
 /* Value returned in ppm, as read from file */
@@ -93,12 +96,15 @@ extern void CNF_SetupAccessRestrictions(void);
 extern int CNF_GetSchedPriority(void);
 extern int CNF_GetLockMemory(void);
 
-extern void CNF_GetTempComp(char **file, double *interval, double *T0, double *k0, double *k1, double *k2);
+extern void CNF_GetSmooth(double *max_freq, double *max_wander);
+extern void CNF_GetTempComp(char **file, double *interval, char **point_file, double *T0, double *k0, double *k1, double *k2);
 
 extern char *CNF_GetUser(void);
 
 extern int CNF_GetMaxSamples(void);
 extern int CNF_GetMinSamples(void);
+
+extern int CNF_GetMinSources(void);
 
 extern double CNF_GetRtcAutotrim(void);
 extern char *CNF_GetHwclockFile(void);

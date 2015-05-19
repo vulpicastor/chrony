@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2013
+ * Copyright (C) Miroslav Lichvar  2013-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -34,6 +34,7 @@
 #include "cmdparse.h"
 #include "memory.h"
 #include "nameserv.h"
+#include "ntp.h"
 #include "util.h"
 
 /* ================================================== */
@@ -42,7 +43,7 @@ CPS_Status
 CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
 {
   char *hostname, *cmd;
-  int ok, n, done;
+  int n, done;
   CPS_Status result;
   
   src->port = SRC_DEFAULT_PORT;
@@ -58,6 +59,10 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
   src->params.iburst = 0;
   src->params.min_stratum = SRC_DEFAULT_MINSTRATUM;
   src->params.poll_target = SRC_DEFAULT_POLLTARGET;
+  src->params.version = NTP_VERSION;
+  src->params.max_sources = SRC_DEFAULT_MAXSOURCES;
+  src->params.min_samples = SRC_DEFAULT_MINSAMPLES;
+  src->params.max_samples = SRC_DEFAULT_MAXSAMPLES;
   src->params.sel_option = SRC_SelectNormal;
 
   result = CPS_Success;
@@ -67,10 +72,10 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
 
   if (!*hostname) {
     result = CPS_BadHost;
-    ok = 0;
   } else {
+    src->name = hostname;
+
     /* Parse subfields */
-    ok = 1;
     done = 0;
     do {
       cmd = line;
@@ -80,7 +85,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         if (!strcasecmp(cmd, "port")) {
           if (sscanf(line, "%hu%n", &src->port, &n) != 1) {
             result = CPS_BadPort;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -88,7 +92,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "minpoll")) {
           if (sscanf(line, "%d%n", &src->params.minpoll, &n) != 1) {
             result = CPS_BadMinpoll;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -96,7 +99,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "maxpoll")) {
           if (sscanf(line, "%d%n", &src->params.maxpoll, &n) != 1) {
             result = CPS_BadMaxpoll;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -104,7 +106,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "presend")) {
           if (sscanf(line, "%d%n", &src->params.presend_minpoll, &n) != 1) {
             result = CPS_BadPresend;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -112,7 +113,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "maxdelaydevratio")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay_dev_ratio, &n) != 1) {
             result = CPS_BadMaxdelaydevratio;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -120,7 +120,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "maxdelayratio")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay_ratio, &n) != 1) {
             result = CPS_BadMaxdelayratio;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -128,16 +127,14 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "maxdelay")) {
           if (sscanf(line, "%lf%n", &src->params.max_delay, &n) != 1) {
             result = CPS_BadMaxdelay;
-            ok = 0;
             done = 1;
           } else {
             line += n;
           }
         } else if (!strcasecmp(cmd, "key")) {
-          if (sscanf(line, "%lu%n", &src->params.authkey, &n) != 1 ||
+          if (sscanf(line, "%"SCNu32"%n", &src->params.authkey, &n) != 1 ||
               src->params.authkey == INACTIVE_AUTHKEY) {
             result = CPS_BadKey;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -154,7 +151,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "minstratum")) {
           if (sscanf(line, "%d%n", &src->params.min_stratum, &n) != 1) {
             result = CPS_BadMinstratum;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -163,7 +159,6 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "polltarget")) {
           if (sscanf(line, "%d%n", &src->params.poll_target, &n) != 1) {
             result = CPS_BadPolltarget;
-            ok = 0;
             done = 1;
           } else {
             line += n;
@@ -175,9 +170,40 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
         } else if (!strcasecmp(cmd, "prefer")) {
           src->params.sel_option = SRC_SelectPrefer;
         
+        } else if (!strcasecmp(cmd, "version")) {
+          if (sscanf(line, "%d%n", &src->params.version, &n) != 1) {
+            result = CPS_BadVersion;
+            done = 1;
+          } else {
+            line += n;
+          }
+
+        } else if (!strcasecmp(cmd, "maxsources")) {
+          if (sscanf(line, "%d%n", &src->params.max_sources, &n) != 1) {
+            result = CPS_BadMaxsources;
+            done = 1;
+          } else {
+            line += n;
+          }
+
+        } else if (!strcasecmp(cmd, "minsamples")) {
+          if (sscanf(line, "%d%n", &src->params.min_samples, &n) != 1) {
+            result = CPS_BadMinsamples;
+            done = 1;
+          } else {
+            line += n;
+          }
+
+        } else if (!strcasecmp(cmd, "maxsamples")) {
+          if (sscanf(line, "%d%n", &src->params.max_samples, &n) != 1) {
+            result = CPS_BadMaxsamples;
+            done = 1;
+          } else {
+            line += n;
+          }
+
         } else {
           result = CPS_BadOption;
-          ok = 0;
           done = 1;
         }
       } else {
@@ -186,12 +212,73 @@ CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src)
     } while (!done);
   }
 
-  if (ok) {
-    src->name = strdup(hostname);
+  return result;
+}
+
+/* ================================================== */
+
+void
+CPS_StatusToString(CPS_Status status, char *dest, int len)
+{
+  const char *s = NULL;
+
+  if (len > 0)
+    dest[0] = '\0';
+
+  switch (status) {
+    case CPS_Success:
+      return;
+    case CPS_BadOption:
+      s = "server/peer/pool option";
+      break;
+    case CPS_BadHost:
+      s = "address";
+      break;
+    case CPS_BadPort:
+      s = "port";
+      break;
+    case CPS_BadMinpoll:
+      s = "minpoll";
+      break;
+    case CPS_BadMaxpoll:
+      s = "maxpoll";
+      break;
+    case CPS_BadPresend:
+      s = "presend";
+      break;
+    case CPS_BadMaxdelaydevratio:
+      s = "maxdelaydevratio";
+      break;
+    case CPS_BadMaxdelayratio:
+      s = "maxdelayratio";
+      break;
+    case CPS_BadMaxdelay:
+      s = "maxdelay";
+      break;
+    case CPS_BadKey:
+      s = "key";
+      break;
+    case CPS_BadMinstratum:
+      s = "minstratum";
+      break;
+    case CPS_BadPolltarget:
+      s = "polltarget";
+      break;
+    case CPS_BadVersion:
+      s = "version";
+      break;
+    case CPS_BadMaxsources:
+      s = "maxsources";
+      break;
+    case CPS_BadMinsamples:
+      s = "minsamples";
+      break;
+    case CPS_BadMaxsamples:
+      s = "maxsamples";
+      break;
   }
 
-  return result;
-    
+  snprintf(dest, len, "Invalid %s", s);
 }
 
 /* ================================================== */
@@ -254,7 +341,7 @@ CPS_SplitWord(char *line)
 /* ================================================== */
 
 int
-CPS_ParseKey(char *line, unsigned long *id, const char **hash, char **key)
+CPS_ParseKey(char *line, uint32_t *id, const char **hash, char **key)
 {
   char *s1, *s2, *s3, *s4;
 
@@ -267,7 +354,7 @@ CPS_ParseKey(char *line, unsigned long *id, const char **hash, char **key)
   if (!*s2 || *s4)
     return 0;
 
-  if (sscanf(s1, "%lu", id) != 1)
+  if (sscanf(s1, "%"SCNu32, id) != 1)
     return 0;
 
   if (*s3) {

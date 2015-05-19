@@ -62,9 +62,9 @@
 #include <syslog.h>
 #include <time.h>
 
-#ifdef HAS_INTTYPES_H
+#ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
-#elif HAS_STDINT_H
+#elif HAVE_STDINT_H
 #include <stdint.h>
 #else
 /* Tough */
@@ -78,7 +78,7 @@
 
 #endif
 
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
 /* For inet_ntop() */
 #include <arpa/inet.h>
 #endif

@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997,1998,1999,2000,2001,2002,2005
- * Copyright (C) Miroslav Lichvar  2009
+ * Copyright (C) Miroslav Lichvar  2009, 2015
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -362,6 +362,44 @@ ADF_IsAllowed(ADF_AuthTable table,
   }
 
   return 0;
+}
+
+/* ================================================== */
+
+static int
+is_any_allowed(TableNode *node, State parent)
+{
+  State state;
+  int i;
+
+  state = node->state != AS_PARENT ? node->state : parent;
+  assert(state != AS_PARENT);
+
+  if (node->extended) {
+    for (i = 0; i < TABLE_SIZE; i++) {
+      if (is_any_allowed(&node->extended[i], state))
+        return 1;
+    }
+  } else if (state == ALLOW) {
+    return 1;
+  }
+
+  return 0;
+}
+
+/* ================================================== */
+
+int
+ADF_IsAnyAllowed(ADF_AuthTable table, int family)
+{
+  switch (family) {
+    case IPADDR_INET4:
+      return is_any_allowed(&table->base4, AS_PARENT);
+    case IPADDR_INET6:
+      return is_any_allowed(&table->base6, AS_PARENT);
+    default:
+      return 0;
+  }
 }
 
 /* ================================================== */

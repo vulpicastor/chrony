@@ -48,8 +48,8 @@
 #include "rtc.h"
 #include "refclock.h"
 #include "clientlog.h"
-#include "broadcast.h"
 #include "nameserv.h"
+#include "smooth.h"
 #include "tempcomp.h"
 
 /* ================================================== */
@@ -86,27 +86,33 @@ MAI_CleanupAndExit(void)
     SRC_DumpSources();
   }
 
+  /* Don't update clock when removing sources */
+  REF_SetMode(REF_ModeIgnore);
+
+  SMT_Finalise();
   TMC_Finalise();
   MNL_Finalise();
   CLG_Finalise();
   NSR_Finalise();
   NCR_Finalise();
-  BRD_Finalise();
+  CAM_Finalise();
+  NIO_Finalise();
   SST_Finalise();
-  REF_Finalise();
   KEY_Finalise();
   RCL_Finalise();
   SRC_Finalise();
+  REF_Finalise();
   RTC_Finalise();
-  CAM_Finalise();
-  NIO_Finalise();
   SYS_Finalise();
   SCH_Finalise();
   LCL_Finalise();
 
   delete_pidfile();
   
+  CNF_Finalise();
   LOG_Finalise();
+
+  HSH_Finalise();
 
   exit(exit_status);
 }
@@ -341,6 +347,7 @@ int main
 (int argc, char **argv)
 {
   const char *conf_file = DEFAULT_CONF_FILE;
+  const char *progname = argv[0];
   char *user = NULL;
   int debug = 0, nofork = 0, address_family = IPADDR_UNSPEC;
   int do_init_rtc = 0, restarted = 0;
@@ -379,8 +386,8 @@ int main
       do_init_rtc = 1;
     } else if (!strcmp("-v", *argv) || !strcmp("--version",*argv)) {
       /* This write to the terminal is OK, it comes before we turn into a daemon */
-      printf("chronyd (chrony) version %s\n", CHRONY_VERSION);
-      exit(0);
+      printf("chronyd (chrony) version %s (%s)\n", CHRONY_VERSION, CHRONYD_FEATURES);
+      return 0;
     } else if (!strcmp("-n", *argv)) {
       nofork = 1;
     } else if (!strcmp("-d", *argv)) {
@@ -399,6 +406,10 @@ int main
       address_family = IPADDR_INET4;
     } else if (!strcmp("-6", *argv)) {
       address_family = IPADDR_INET6;
+    } else if (!strcmp("-h", *argv) || !strcmp("--help", *argv)) {
+      printf("Usage: %s [-4|-6] [-n|-d] [-q|-Q] [-r] [-R] [-s] [-f FILE|COMMAND...]\n",
+             progname);
+      return 0;
     } else if (*argv[0] == '-') {
       LOG_FATAL(LOGF_Main, "Unrecognized command line option [%s]", *argv);
     } else {
@@ -411,7 +422,7 @@ int main
   if (getuid() != 0) {
     /* This write to the terminal is OK, it comes before we turn into a daemon */
     fprintf(stderr,"Not superuser\n");
-    exit(1);
+    return 1;
   }
 
   /* Turn into a daemon */
@@ -425,11 +436,12 @@ int main
   
   LOG_SetDebugLevel(debug);
   
-  LOG(LOGS_INFO, LOGF_Main, "chronyd version %s starting", CHRONY_VERSION);
+  LOG(LOGS_INFO, LOGF_Main, "chronyd version %s starting (%s)",
+      CHRONY_VERSION, CHRONYD_FEATURES);
 
   DNS_SetAddressFamily(address_family);
 
-  CNF_SetRestarted(restarted);
+  CNF_Initialise(restarted);
 
   /* Parse the config file or the remaining command line arguments */
   if (!config_args) {
@@ -455,8 +467,6 @@ int main
   LCL_Initialise();
   SCH_Initialise();
   SYS_Initialise();
-  NIO_Initialise(address_family);
-  CAM_Initialise(address_family);
   RTC_Initialise(do_init_rtc);
   SRC_Initialise();
   RCL_Initialise();
@@ -485,12 +495,14 @@ int main
 
   REF_Initialise();
   SST_Initialise();
-  BRD_Initialise();
+  NIO_Initialise(address_family);
+  CAM_Initialise(address_family);
   NCR_Initialise();
   NSR_Initialise();
   CLG_Initialise();
   MNL_Initialise();
   TMC_Initialise();
+  SMT_Initialise();
 
   /* From now on, it is safe to do finalisation on exit */
   initialised = 1;

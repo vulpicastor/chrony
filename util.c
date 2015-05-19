@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2009, 2012-2013
+ * Copyright (C) Miroslav Lichvar  2009, 2012-2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -238,18 +238,18 @@ char *
 UTI_RefidToString(uint32_t ref_id)
 {
   unsigned int i, j, c;
-  char buf[5], *result;
-
-  for (i = j = 0; i < 4; i++) {
-    c = (ref_id >> (24 - i * 8)) & 0xff;
-    if (isprint(c))
-      buf[j++] = c;
-  }
-
-  buf[j] = '\0';
+  char *result;
 
   result = NEXT_BUFFER;
-  snprintf(result, BUFFER_LENGTH, "%s", buf);
+
+  for (i = j = 0; i < 4 && i < BUFFER_LENGTH - 1; i++) {
+    c = (ref_id >> (24 - i * 8)) & 0xff;
+    if (isprint(c))
+      result[j++] = c;
+  }
+
+  result[j] = '\0';
+
   return result;
 }
 
@@ -277,7 +277,7 @@ UTI_IPToString(IPAddr *addr)
       break;
     case IPADDR_INET6:
       ip6 = addr->addr.in6;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
       inet_ntop(AF_INET6, ip6, result, BUFFER_LENGTH);
 #else
       snprintf(result, BUFFER_LENGTH, "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
@@ -296,7 +296,7 @@ UTI_IPToString(IPAddr *addr)
 int
 UTI_StringToIP(const char *addr, IPAddr *ip)
 {
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
   struct in_addr in4;
   struct in6_addr in6;
 
@@ -426,6 +426,65 @@ UTI_CompareIPs(IPAddr *a, IPAddr *b, IPAddr *mask)
 
 /* ================================================== */
 
+void
+UTI_SockaddrToIPAndPort(struct sockaddr *sa, IPAddr *ip, unsigned short *port)
+{
+  switch (sa->sa_family) {
+    case AF_INET:
+      ip->family = IPADDR_INET4;
+      ip->addr.in4 = ntohl(((struct sockaddr_in *)sa)->sin_addr.s_addr);
+      *port = ntohs(((struct sockaddr_in *)sa)->sin_port);
+      break;
+#ifdef FEAT_IPV6
+    case AF_INET6:
+      ip->family = IPADDR_INET6;
+      memcpy(ip->addr.in6, ((struct sockaddr_in6 *)sa)->sin6_addr.s6_addr,
+             sizeof (ip->addr.in6));
+      *port = ntohs(((struct sockaddr_in6 *)sa)->sin6_port);
+      break;
+#endif
+    default:
+      ip->family = IPADDR_UNSPEC;
+      *port = 0;
+  }
+}
+
+/* ================================================== */
+
+int
+UTI_IPAndPortToSockaddr(IPAddr *ip, unsigned short port, struct sockaddr *sa)
+{
+  switch (ip->family) {
+    case IPADDR_INET4:
+      memset(sa, 0, sizeof (struct sockaddr_in));
+      sa->sa_family = AF_INET;
+      ((struct sockaddr_in *)sa)->sin_addr.s_addr = htonl(ip->addr.in4);
+      ((struct sockaddr_in *)sa)->sin_port = htons(port);
+#ifdef SIN6_LEN
+      ((struct sockaddr_in *)sa)->sin_len = sizeof (struct sockaddr_in);
+#endif
+      return sizeof (struct sockaddr_in);
+#ifdef FEAT_IPV6
+    case IPADDR_INET6:
+      memset(sa, 0, sizeof (struct sockaddr_in6));
+      sa->sa_family = AF_INET6;
+      memcpy(((struct sockaddr_in6 *)sa)->sin6_addr.s6_addr, ip->addr.in6,
+             sizeof (ip->addr.in6));
+      ((struct sockaddr_in6 *)sa)->sin6_port = htons(port);
+#ifdef SIN6_LEN
+      ((struct sockaddr_in6 *)sa)->sin6_len = sizeof (struct sockaddr_in6);
+#endif
+      return sizeof (struct sockaddr_in6);
+#endif
+    default:
+      memset(sa, 0, sizeof (struct sockaddr));
+      sa->sa_family = AF_UNSPEC;
+      return 0;
+  }
+}
+
+/* ================================================== */
+
 char *
 UTI_TimeToLogForm(time_t t)
 {
@@ -490,7 +549,7 @@ UTI_DoubleToInt32(double x)
 
 /* ================================================== */
 
-/* Seconds part of RFC1305 timestamp correponding to the origin of the
+/* Seconds part of NTP timestamp correponding to the origin of the
    struct timeval format. */
 #define JAN_1970 0x83aa7e80UL
 
@@ -543,6 +602,43 @@ UTI_Int64ToTimeval(NTP_int64 *src,
   
   /* Until I invent a slick way to do this, just do it the obvious way */
   dest->tv_usec = (int)(0.5 + (double)(ntp_frac) / 4294.967296);
+}
+
+/* ================================================== */
+
+/* Maximum offset between two sane times */
+#define MAX_OFFSET 4294967296.0
+
+/* Minimum allowed distance from maximum 32-bit time_t */
+#define MIN_ENDOFTIME_DISTANCE (365 * 24 * 3600)
+
+int
+UTI_IsTimeOffsetSane(struct timeval *tv, double offset)
+{
+  double t;
+
+  /* Handle nan correctly here */
+  if (!(offset > -MAX_OFFSET && offset < MAX_OFFSET))
+    return 0;
+
+  UTI_TimevalToDouble(tv, &t);
+  t += offset;
+
+  /* Time before 1970 is not considered valid */
+  if (t < 0.0)
+    return 0;
+
+#ifdef HAVE_LONG_TIME_T
+  /* Check if it's in the interval to which NTP time is mapped */
+  if (t < (double)NTP_ERA_SPLIT || t > (double)(NTP_ERA_SPLIT + (1LL << 32)))
+    return 0;
+#else
+  /* Don't get too close to 32-bit time_t overflow */
+  if (t > (double)(0x7fffffff - MIN_ENDOFTIME_DISTANCE))
+    return 0;
+#endif
+
+  return 1;
 }
 
 /* ================================================== */

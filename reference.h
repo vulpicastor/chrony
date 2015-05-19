@@ -35,6 +35,14 @@
 #include "ntp.h"
 #include "reports.h"
 
+/* Leap second handling modes */
+typedef enum {
+  REF_LeapModeSystem,
+  REF_LeapModeSlew,
+  REF_LeapModeStep,
+  REF_LeapModeIgnore,
+} REF_LeapMode;
+
 /* Init function */
 extern void REF_Initialise(void);
 
@@ -60,6 +68,9 @@ typedef void (*REF_ModeEndHandler)(int result);
 
 /* Set the handler for being notified of mode ending */
 extern void REF_SetModeEndHandler(REF_ModeEndHandler handler);
+
+/* Get leap second handling mode */
+extern REF_LeapMode REF_GetLeapMode(void);
 
 /* Function which takes a local cooked time and returns the estimated
    time of the reference.  It also returns the other parameters
@@ -154,8 +165,14 @@ REF_SetUnsynchronised(void);
    synchronised */
 extern int REF_GetOurStratum(void);
 
+/* Return the current skew */
+extern double REF_GetSkew(void);
+
 /* Modify the setting for the maximum skew we are prepared to allow updates on (in ppm). */
 extern void REF_ModifyMaxupdateskew(double new_max_update_skew);
+
+/* Modify makestep settings */
+extern void REF_ModifyMakestep(int limit, double threshold);
 
 extern void REF_EnableLocal(int stratum);
 extern void REF_DisableLocal(void);

@@ -3,7 +3,7 @@
 
  **********************************************************************
  * Copyright (C) Richard P. Curnow  1997-2003
- * Copyright (C) Miroslav Lichvar  2011, 2014
+ * Copyright (C) Miroslav Lichvar  2011, 2014-2015
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -36,10 +36,15 @@
 #include "local.h"
 #include "localp.h"
 #include "memory.h"
+#include "smooth.h"
 #include "util.h"
 #include "logging.h"
 
 /* ================================================== */
+
+/* Maximum allowed frequency offset in ppm, the time must not stop
+   or run backwards */
+#define MAX_FREQ 500000.0
 
 /* Variable to store the current frequency, in ppm */
 static double current_freq_ppm;
@@ -56,6 +61,7 @@ static lcl_AccrueOffsetDriver drv_accrue_offset;
 static lcl_ApplyStepOffsetDriver drv_apply_step_offset;
 static lcl_OffsetCorrectionDriver drv_offset_convert;
 static lcl_SetLeapDriver drv_set_leap;
+static lcl_SetSyncStatusDriver drv_set_sync_status;
 
 /* ================================================== */
 
@@ -168,6 +174,13 @@ LCL_Initialise(void)
 void
 LCL_Finalise(void)
 {
+  while (change_list.next != &change_list)
+    LCL_RemoveParameterChangeHandler(change_list.next->handler,
+                                     change_list.next->anything);
+
+  while (dispersion_notify_list.next != &dispersion_notify_list)
+    LCL_RemoveDispersionNotifyHandler(dispersion_notify_list.next->handler,
+                                      dispersion_notify_list.next->anything);
 }
 
 /* ================================================== */
@@ -247,7 +260,7 @@ void LCL_RemoveParameterChangeHandler(LCL_ParameterChangeHandler handler, void *
   ptr->next->prev = ptr->prev;
   ptr->prev->next = ptr->next;
 
-  free(ptr);
+  Free(ptr);
 }
 
 /* ================================================== */
@@ -324,7 +337,7 @@ void LCL_RemoveDispersionNotifyHandler(LCL_DispersionNotifyHandler handler, void
   ptr->next->prev = ptr->prev;
   ptr->prev->next = ptr->next;
 
-  free(ptr);
+  Free(ptr);
 }
 
 /* ================================================== */
@@ -389,6 +402,33 @@ LCL_ReadAbsoluteFrequency(void)
 }
 
 /* ================================================== */
+
+static double
+clamp_freq(double freq)
+{
+  if (freq <= MAX_FREQ && freq >= -MAX_FREQ)
+    return freq;
+
+  LOG(LOGS_WARN, LOGF_Local, "Frequency %.1f ppm exceeds allowed maximum", freq);
+
+  return freq >= MAX_FREQ ? MAX_FREQ : -MAX_FREQ;
+}
+
+/* ================================================== */
+
+static int
+check_offset(struct timeval *now, double offset)
+{
+  /* Check if the time will be still sane with accumulated offset */
+  if (UTI_IsTimeOffsetSane(now, -offset))
+      return 1;
+
+  LOG(LOGS_WARN, LOGF_Local, "Adjustment of %.1f seconds is invalid", -offset);
+  return 0;
+}
+
+/* ================================================== */
+
 /* This involves both setting the absolute frequency with the
    system-specific driver, as well as calling all notify handlers */
 
@@ -398,6 +438,8 @@ LCL_SetAbsoluteFrequency(double afreq_ppm)
   struct timeval raw, cooked;
   double dfreq;
   
+  afreq_ppm = clamp_freq(afreq_ppm);
+
   /* Apply temperature compensation */
   if (temp_comp_ppm != 0.0) {
     afreq_ppm = afreq_ppm * (1.0 - 1.0e-6 * temp_comp_ppm) - temp_comp_ppm;
@@ -435,6 +477,8 @@ LCL_AccumulateDeltaFrequency(double dfreq)
 
   current_freq_ppm += dfreq * (1.0e6 - current_freq_ppm);
 
+  current_freq_ppm = clamp_freq(current_freq_ppm);
+
   /* Call the system-specific driver for setting the frequency */
   current_freq_ppm = (*drv_set_freq)(current_freq_ppm);
   dfreq = (current_freq_ppm - old_freq_ppm) / (1.0e6 - old_freq_ppm);
@@ -459,6 +503,9 @@ LCL_AccumulateOffset(double offset, double corr_rate)
   LCL_ReadRawTime(&raw);
   LCL_CookTime(&raw, &cooked, NULL);
 
+  if (!check_offset(&cooked, offset))
+      return;
+
   (*drv_accrue_offset)(offset, corr_rate);
 
   /* Dispatch to all handlers */
@@ -467,7 +514,7 @@ LCL_AccumulateOffset(double offset, double corr_rate)
 
 /* ================================================== */
 
-void
+int
 LCL_ApplyStepOffset(double offset)
 {
   struct timeval raw, cooked;
@@ -478,10 +525,21 @@ LCL_ApplyStepOffset(double offset)
   LCL_ReadRawTime(&raw);
   LCL_CookTime(&raw, &cooked, NULL);
 
-  (*drv_apply_step_offset)(offset);
+  if (!check_offset(&raw, offset))
+      return 0;
+
+  if (!(*drv_apply_step_offset)(offset)) {
+    LOG(LOGS_ERR, LOGF_Local, "Could not step clock");
+    return 0;
+  }
+
+  /* Reset smoothing on all clock steps */
+  SMT_Reset(&cooked);
 
   /* Dispatch to all handlers */
   invoke_parameter_change_handlers(&raw, &cooked, 0.0, offset, LCL_ChangeStep);
+
+  return 1;
 }
 
 /* ================================================== */
@@ -499,6 +557,20 @@ LCL_NotifyExternalTimeStep(struct timeval *raw, struct timeval *cooked,
 /* ================================================== */
 
 void
+LCL_NotifyLeap(int leap)
+{
+  struct timeval raw, cooked;
+
+  LCL_ReadRawTime(&raw);
+  LCL_CookTime(&raw, &cooked, NULL);
+
+  /* Dispatch to all handlers as if the clock was stepped */
+  invoke_parameter_change_handlers(&raw, &cooked, 0.0, -leap, LCL_ChangeStep);
+}
+
+/* ================================================== */
+
+void
 LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset, double corr_rate)
 {
   struct timeval raw, cooked;
@@ -509,12 +581,17 @@ LCL_AccumulateFrequencyAndOffset(double dfreq, double doffset, double corr_rate)
      to the change we are about to make */
   LCL_CookTime(&raw, &cooked, NULL);
 
+  if (!check_offset(&cooked, doffset))
+      return;
+
   old_freq_ppm = current_freq_ppm;
 
   /* Work out new absolute frequency.  Note that absolute frequencies
    are handled in units of ppm, whereas the 'dfreq' argument is in
    terms of the gradient of the (offset) v (local time) function. */
   current_freq_ppm += dfreq * (1.0e6 - current_freq_ppm);
+
+  current_freq_ppm = clamp_freq(current_freq_ppm);
 
   DEBUG_LOG(LOGF_Local, "old_freq=%.3fppm new_freq=%.3fppm offset=%.6fsec",
       old_freq_ppm, current_freq_ppm, doffset);
@@ -550,7 +627,8 @@ lcl_RegisterSystemDrivers(lcl_ReadFrequencyDriver read_freq,
                           lcl_AccrueOffsetDriver accrue_offset,
                           lcl_ApplyStepOffsetDriver apply_step_offset,
                           lcl_OffsetCorrectionDriver offset_convert,
-                          lcl_SetLeapDriver set_leap)
+                          lcl_SetLeapDriver set_leap,
+                          lcl_SetSyncStatusDriver set_sync_status)
 {
   drv_read_freq = read_freq;
   drv_set_freq = set_freq;
@@ -558,6 +636,7 @@ lcl_RegisterSystemDrivers(lcl_ReadFrequencyDriver read_freq,
   drv_apply_step_offset = apply_step_offset;
   drv_offset_convert = offset_convert;
   drv_set_leap = set_leap;
+  drv_set_sync_status = set_sync_status;
 
   current_freq_ppm = (*drv_read_freq)();
 
@@ -577,9 +656,13 @@ LCL_MakeStep(void)
   LCL_ReadRawTime(&raw);
   LCL_GetOffsetCorrection(&raw, &correction, NULL);
 
+  if (!check_offset(&raw, -correction))
+      return 0;
+
   /* Cancel remaining slew and make the step */
   LCL_AccumulateOffset(correction, 0.0);
-  LCL_ApplyStepOffset(-correction);
+  if (!LCL_ApplyStepOffset(-correction))
+    return 0;
 
   LOG(LOGS_WARN, LOGF_Local, "System clock was stepped by %.6f seconds", correction);
 
@@ -588,8 +671,16 @@ LCL_MakeStep(void)
 
 /* ================================================== */
 
+int
+LCL_CanSystemLeap(void)
+{
+  return drv_set_leap ? 1 : 0;
+}
+
+/* ================================================== */
+
 void
-LCL_SetLeap(int leap)
+LCL_SetSystemLeap(int leap)
 {
   if (drv_set_leap) {
     (drv_set_leap)(leap);
@@ -622,6 +713,16 @@ LCL_SetTempComp(double comp)
     (1.0e-6 * uncomp_freq_ppm + 1.0);
 
   return temp_comp_ppm;
+}
+
+/* ================================================== */
+
+void
+LCL_SetSyncStatus(int synchronised, double est_error, double max_error)
+{
+  if (drv_set_sync_status) {
+    (drv_set_sync_status)(synchronised, est_error, max_error);
+  }
 }
 
 /* ================================================== */

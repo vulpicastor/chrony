@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Richard P. Curnow  1997-2002
+ * Copyright (C) Miroslav Lichvar  2014
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -21,17 +21,47 @@
 
   =======================================================================
 
-  Deal with broadcast server functions.
+  Utility functions for memory allocation.
+
   */
 
-#ifndef GOT_BROADCAST_H
-#define GOT_BROADCAST_H
+#include "config.h"
 
-#include "addressing.h"
+#include "logging.h"
+#include "memory.h"
 
-extern void BRD_Initialise(void);
-extern void BRD_Finalise(void);
-extern void BRD_AddDestination(IPAddr *addr, unsigned short port, int interval);
+void *
+Malloc(size_t size)
+{
+  void *r;
 
-#endif /* GOT_BROADCAST_H */
+  r = malloc(size);
+  if (!r && size)
+    LOG_FATAL(LOGF_Memory, "Could not allocate memory");
 
+  return r;
+}
+
+void *
+Realloc(void *ptr, size_t size)
+{
+  void *r;
+
+  r = realloc(ptr, size);
+  if (!r && size)
+    LOG_FATAL(LOGF_Memory, "Could not allocate memory");
+
+  return r;
+}
+
+char *
+Strdup(const char *s)
+{
+  void *r;
+
+  r = strdup(s);
+  if (!r)
+    LOG_FATAL(LOGF_Memory, "Could not allocate memory");
+
+  return r;
+}

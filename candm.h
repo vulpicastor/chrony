@@ -88,7 +88,8 @@
 #define REQ_MODIFY_MAXDELAYDEVRATIO 47
 #define REQ_RESELECT 48
 #define REQ_RESELECTDISTANCE 49
-#define N_REQUEST_TYPES 50
+#define REQ_MODIFY_MAKESTEP 50
+#define N_REQUEST_TYPES 51
 
 /* Special utoken value used to log on with first exchange being the
    password.  (This time value has long since gone by) */
@@ -186,6 +187,12 @@ typedef struct {
   Float new_max_update_skew;
   int32_t EOR;
 } REQ_Modify_Maxupdateskew;
+
+typedef struct {
+  int32_t limit;
+  Float threshold;
+  int32_t EOR;
+} REQ_Modify_Makestep;
 
 typedef struct {
   Timeval ts;
@@ -293,11 +300,6 @@ typedef struct {
   int32_t EOR;
 } REQ_CycleLogs;
 
-typedef struct {
-  IPAddr ip;
-  uint32_t bits_specd;
-} REQ_SubnetsAccessed_Subnet;
-
 /* This is based on the response size rather than the
    request size */
 #define MAX_CLIENT_ACCESSES 8
@@ -362,7 +364,8 @@ typedef struct {
    subnets accessed and client accesses
 
    Version 6 : added padding to requests to prevent amplification attack,
-   changed maximum number of samples in manual list to 16
+   changed maximum number of samples in manual list to 16, new commands: modify
+   makestep
  */
 
 #define PROTO_VERSION_NUMBER 6
@@ -407,6 +410,7 @@ typedef struct {
     REQ_Modify_Minstratum modify_minstratum;
     REQ_Modify_Polltarget modify_polltarget;
     REQ_Modify_Maxupdateskew modify_maxupdateskew;
+    REQ_Modify_Makestep modify_makestep;
     REQ_Logon logon;
     REQ_Settime settime;
     REQ_Local local;
@@ -579,12 +583,6 @@ typedef struct {
   Float new_afreq_ppm;
   int32_t EOR;
 } RPY_ManualTimestamp;
-
-typedef struct {
-  IPAddr ip;
-  uint32_t bits_specd;
-  uint32_t bitmap[8];
-} RPY_SubnetsAccessed_Subnet;
 
 typedef struct {
   IPAddr ip;

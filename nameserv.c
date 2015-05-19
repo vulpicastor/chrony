@@ -44,11 +44,11 @@ DNS_SetAddressFamily(int family)
 }
 
 DNS_Status 
-DNS_Name2IPAddress(const char *name, IPAddr *addr)
+DNS_Name2IPAddress(const char *name, IPAddr *ip_addrs, int max_addrs)
 {
 #ifdef HAVE_GETADDRINFO
   struct addrinfo hints, *res, *ai;
-  int result;
+  int i, result;
   
   memset(&hints, 0, sizeof (hints));
   hints.ai_family = AF_UNSPEC;
@@ -64,38 +64,58 @@ DNS_Name2IPAddress(const char *name, IPAddr *addr)
 #endif
   }
 
-  for (ai = res; !result && ai != NULL; ai = ai->ai_next) {
+  for (ai = res, i = 0; i < max_addrs && ai != NULL; ai = ai->ai_next) {
     switch (ai->ai_family) {
       case AF_INET:
-        addr->family = IPADDR_INET4;
-        addr->addr.in4 = ntohl(((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr);
-        result = 1;
+        if (address_family != IPADDR_UNSPEC && address_family != IPADDR_INET4)
+          continue;
+        ip_addrs[i].family = IPADDR_INET4;
+        ip_addrs[i].addr.in4 = ntohl(((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr);
+        i++;
         break;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
       case AF_INET6:
-        addr->family = IPADDR_INET6;
-        memcpy(&addr->addr.in6, &((struct sockaddr_in6 *)ai->ai_addr)->sin6_addr.s6_addr, sizeof (addr->addr.in6));
-        result = 1;
+        if (address_family != IPADDR_UNSPEC && address_family != IPADDR_INET6)
+          continue;
+        ip_addrs[i].family = IPADDR_INET6;
+        memcpy(&ip_addrs[i].addr.in6, &((struct sockaddr_in6 *)ai->ai_addr)->sin6_addr.s6_addr,
+               sizeof (ip_addrs->addr.in6));
+        i++;
         break;
 #endif
     }
-    if (result && address_family != IPADDR_UNSPEC && address_family != addr->family)
-      result = 0;
   }
 
+  for (; i < max_addrs; i++)
+        ip_addrs[i].family = IPADDR_UNSPEC;
+
   freeaddrinfo(res);
-  return result ? DNS_Success : DNS_Failure;
+
+  return !max_addrs || ip_addrs[0].family != IPADDR_UNSPEC ? DNS_Success : DNS_Failure;
 #else
   struct hostent *host;
+  int i;
   
+  if (address_family != IPADDR_UNSPEC && address_family != IPADDR_INET4)
+    return DNS_Failure;
+
   host = gethostbyname(name);
 
   if (host == NULL) {
     if (h_errno == TRY_AGAIN)
       return DNS_TryAgain;
   } else {
-    addr->family = IPADDR_INET4;
-    addr->addr.in4 = ntohl(*(uint32_t *)host->h_addr_list[0]);
+    if (host->h_addrtype != AF_INET || !host->h_addr_list[0])
+      return DNS_Failure;
+
+    for (i = 0; host->h_addr_list[i] && i < max_addrs; i++) {
+      ip_addrs[i].family = IPADDR_INET4;
+      ip_addrs[i].addr.in4 = ntohl(*(uint32_t *)host->h_addr_list[i]);
+    }
+
+    for (; i < max_addrs; i++)
+      ip_addrs[i].family = IPADDR_UNSPEC;
+
     return DNS_Success;
   }
 
@@ -115,33 +135,14 @@ DNS_IPAddress2Name(IPAddr *ip_addr, char *name, int len)
 {
   char *result = NULL;
 
-#ifdef HAVE_IPV6
-  struct sockaddr_in in4;
+#ifdef FEAT_IPV6
   struct sockaddr_in6 in6;
+  socklen_t slen;
   char hbuf[NI_MAXHOST];
 
-  switch (ip_addr->family) {
-    case IPADDR_INET4:
-      memset(&in4, 0, sizeof (in4));
-#ifdef SIN6_LEN
-      in4.sin_len = sizeof (in4);
-#endif
-      in4.sin_family = AF_INET;
-      in4.sin_addr.s_addr = htonl(ip_addr->addr.in4);
-      if (!getnameinfo((const struct sockaddr *)&in4, sizeof (in4), hbuf, sizeof (hbuf), NULL, 0, 0))
-        result = hbuf;
-      break;
-    case IPADDR_INET6:
-      memset(&in6, 0, sizeof (in6));
-#ifdef SIN6_LEN
-      in6.sin6_len = sizeof (in6);
-#endif
-      in6.sin6_family = AF_INET6;
-      memcpy(&in6.sin6_addr.s6_addr, ip_addr->addr.in6, sizeof (in6.sin6_addr.s6_addr));
-      if (!getnameinfo((const struct sockaddr *)&in6, sizeof (in6), hbuf, sizeof (hbuf), NULL, 0, 0))
-        result = hbuf;
-      break;
-  }
+  slen = UTI_IPAndPortToSockaddr(ip_addr, 0, (struct sockaddr *)&in6);
+  if (!getnameinfo((struct sockaddr *)&in6, slen, hbuf, sizeof (hbuf), NULL, 0, 0))
+    result = hbuf;
 #else
   struct hostent *host;
   uint32_t addr;
@@ -151,7 +152,7 @@ DNS_IPAddress2Name(IPAddr *ip_addr, char *name, int len)
       addr = htonl(ip_addr->addr.in4);
       host = gethostbyaddr((const char *) &addr, sizeof (ip_addr), AF_INET);
       break;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
     case IPADDR_INET6:
       host = gethostbyaddr((const void *) ip_addr->addr.in6, sizeof (ip_addr->addr.in6), AF_INET6);
       break;

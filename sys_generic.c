@@ -39,9 +39,10 @@
 
 /* ================================================== */
 
-/* System clock frequency drivers */
+/* System clock drivers */
 static lcl_ReadFrequencyDriver drv_read_freq;
 static lcl_SetFrequencyDriver drv_set_freq;
+static lcl_SetSyncStatusDriver drv_set_sync_status;
 
 /* Current frequency as requested by the local module (in ppm) */
 static double base_freq;
@@ -107,6 +108,18 @@ handle_step(struct timeval *raw, struct timeval *cooked, double dfreq,
 }
 
 /* ================================================== */
+
+static double
+clamp_freq(double freq)
+{
+  if (freq > max_freq)
+    return max_freq;
+  if (freq < -max_freq)
+    return -max_freq;
+  return freq;
+}
+
+/* ================================================== */
 /* End currently running slew and start a new one */
 
 static void
@@ -143,11 +156,7 @@ update_slew(void)
     corr_freq = max_corr_freq;
 
   /* Get the new real frequency and clamp it */
-  total_freq = base_freq + corr_freq * (1.0e6 - base_freq);
-  if (total_freq > max_freq)
-    total_freq = max_freq;
-  else if (total_freq < -max_freq)
-    total_freq = -max_freq;
+  total_freq = clamp_freq(base_freq + corr_freq * (1.0e6 - base_freq));
 
   /* Set the new frequency (the actual frequency returned by the call may be
      slightly different from the requested frequency due to rounding) */
@@ -249,7 +258,7 @@ offset_convert(struct timeval *raw,
 /* ================================================== */
 /* Positive means currently fast of true time, i.e. jump backwards */
 
-static void
+static int
 apply_step_offset(double offset)
 {
   struct timeval old_time, new_time;
@@ -259,13 +268,32 @@ apply_step_offset(double offset)
   UTI_AddDoubleToTimeval(&old_time, -offset, &new_time);
 
   if (settimeofday(&new_time, NULL) < 0) {
-    LOG_FATAL(LOGF_SysGeneric, "settimeofday() failed");
+    DEBUG_LOG(LOGF_SysGeneric, "settimeofday() failed");
+    return 0;
   }
 
   LCL_ReadRawTime(&old_time);
   UTI_DiffTimevalsToDouble(&err, &old_time, &new_time);
 
   lcl_InvokeDispersionNotifyHandlers(fabs(err));
+
+  return 1;
+}
+
+/* ================================================== */
+
+static void
+set_sync_status(int synchronised, double est_error, double max_error)
+{
+  double offset;
+
+  offset = fabs(offset_register);
+  if (est_error < offset)
+    est_error = offset;
+  max_error += offset;
+
+  if (drv_set_sync_status)
+    drv_set_sync_status(synchronised, est_error, max_error);
 }
 
 /* ================================================== */
@@ -275,12 +303,14 @@ SYS_Generic_CompleteFreqDriver(double max_set_freq_ppm, double max_set_freq_dela
                                lcl_ReadFrequencyDriver sys_read_freq,
                                lcl_SetFrequencyDriver sys_set_freq,
                                lcl_ApplyStepOffsetDriver sys_apply_step_offset,
-                               lcl_SetLeapDriver sys_set_leap)
+                               lcl_SetLeapDriver sys_set_leap,
+                               lcl_SetSyncStatusDriver sys_set_sync_status)
 {
   max_freq = max_set_freq_ppm;
   max_freq_change_delay = max_set_freq_delay * (1.0 + max_freq / 1.0e6);
   drv_read_freq = sys_read_freq;
   drv_set_freq = sys_set_freq;
+  drv_set_sync_status = sys_set_sync_status;
 
   base_freq = (*drv_read_freq)();
   slew_freq = 0.0;
@@ -291,7 +321,7 @@ SYS_Generic_CompleteFreqDriver(double max_set_freq_ppm, double max_set_freq_dela
   lcl_RegisterSystemDrivers(read_frequency, set_frequency,
                             accrue_offset, sys_apply_step_offset ?
                               sys_apply_step_offset : apply_step_offset,
-                            offset_convert, sys_set_leap);
+                            offset_convert, sys_set_leap, set_sync_status);
 
   LCL_AddParameterChangeHandler(handle_step, NULL);
 }
@@ -308,7 +338,7 @@ SYS_Generic_Finalise(void)
     slew_timer_running = 0;
   }
 
-  (*drv_set_freq)(base_freq);
+  (*drv_set_freq)(clamp_freq(base_freq));
 }
 
 /* ================================================== */
