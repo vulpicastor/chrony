@@ -43,7 +43,11 @@ typedef enum {
   CPS_BadMaxdelay,
   CPS_BadKey,
   CPS_BadMinstratum,
-  CPS_BadPolltarget
+  CPS_BadPolltarget,
+  CPS_BadVersion,
+  CPS_BadMaxsources,
+  CPS_BadMinsamples,
+  CPS_BadMaxsamples,
 } CPS_Status;
 
 typedef struct {
@@ -55,6 +59,9 @@ typedef struct {
 /* Parse a command to add an NTP server or peer */
 extern CPS_Status CPS_ParseNTPSourceAdd(char *line, CPS_NTP_Source *src);
   
+/* Get a string describing error status */
+extern void CPS_StatusToString(CPS_Status status, char *dest, int len);
+
 /* Remove extra white-space and comments */
 extern void CPS_NormalizeLine(char *line);
 
@@ -62,6 +69,6 @@ extern void CPS_NormalizeLine(char *line);
 extern char *CPS_SplitWord(char *line);
 
 /* Parse a key from keyfile */
-extern int CPS_ParseKey(char *line, unsigned long *id, const char **hash, char **key);
+extern int CPS_ParseKey(char *line, uint32_t *id, const char **hash, char **key);
 
 #endif /* GOT_CMDPARSE_H */

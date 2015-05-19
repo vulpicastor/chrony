@@ -54,7 +54,7 @@
 
 union sockaddr_in46 {
   struct sockaddr_in in4;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
   struct sockaddr_in6 in6;
 #endif
   struct sockaddr u;
@@ -62,7 +62,7 @@ union sockaddr_in46 {
 
 /* File descriptors for command and monitoring sockets */
 static int sock_fd4;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
 static int sock_fd6;
 #endif
 
@@ -110,7 +110,7 @@ static ResponseCell *free_replies;
 /* ================================================== */
 /* Array of permission levels for command types */
 
-static int permissions[] = {
+static const char permissions[] = {
   PERMIT_OPEN, /* NULL */
   PERMIT_AUTH, /* ONLINE */
   PERMIT_AUTH, /* OFFLINE */
@@ -160,7 +160,8 @@ static int permissions[] = {
   PERMIT_AUTH, /* MODIFY_POLLTARGET */
   PERMIT_AUTH, /* MODIFY_MAXDELAYDEVRATIO */
   PERMIT_AUTH, /* RESELECT */
-  PERMIT_AUTH  /* RESELECTDISTANCE */
+  PERMIT_AUTH, /* RESELECTDISTANCE */
+  PERMIT_AUTH, /* MODIFY_MAKESTEP */
 };
 
 /* ================================================== */
@@ -207,7 +208,7 @@ prepare_socket(int family, int port_number)
   }
 #endif
 
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
   if (family == AF_INET6) {
 #ifdef IPV6_V6ONLY
     /* Receive IPv6 packets only */
@@ -231,9 +232,9 @@ prepare_socket(int family, int port_number)
       if (bind_address.family == IPADDR_INET4)
         my_addr.in4.sin_addr.s_addr = htonl(bind_address.addr.in4);
       else
-        my_addr.in4.sin_addr.s_addr = htonl(INADDR_ANY);
+        my_addr.in4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
       break;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
     case AF_INET6:
       my_addr_len = sizeof (my_addr.in6);
       my_addr.in6.sin6_family = family;
@@ -245,7 +246,7 @@ prepare_socket(int family, int port_number)
         memcpy(my_addr.in6.sin6_addr.s6_addr, bind_address.addr.in6,
             sizeof (my_addr.in6.sin6_addr.s6_addr));
       else
-        my_addr.in6.sin6_addr = in6addr_any;
+        my_addr.in6.sin6_addr = in6addr_loopback;
       break;
 #endif
     default:
@@ -304,7 +305,7 @@ CAM_Initialise(int family)
     sock_fd4 = prepare_socket(AF_INET, port_number);
   else
     sock_fd4 = -1;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
   if (port_number && (family == IPADDR_UNSPEC || family == IPADDR_INET6))
     sock_fd6 = prepare_socket(AF_INET6, port_number);
   else
@@ -312,7 +313,7 @@ CAM_Initialise(int family)
 #endif
 
   if (port_number && sock_fd4 < 0
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
       && sock_fd6 < 0
 #endif
       ) {
@@ -333,7 +334,7 @@ CAM_Finalise(void)
     close(sock_fd4);
   }
   sock_fd4 = -1;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
   if (sock_fd6 >= 0) {
     SCH_RemoveInputFileHandler(sock_fd6);
     close(sock_fd6);
@@ -553,7 +554,7 @@ ts_is_unique_and_not_stale(struct timeval *ts, struct timeval *now)
 
 /* ================================================== */
 
-#define REPLY_EXTEND_QUANTUM 32
+#define REPLY_EXTEND_QUANTUM 8
 
 static void
 get_more_replies(void)
@@ -688,7 +689,7 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
       sock_fd = sock_fd4;
       addrlen = sizeof (where_to->in4);
       break;
-#ifdef HAVE_IPV6
+#ifdef FEAT_IPV6
     case AF_INET6:
       sock_fd = sock_fd6;
       addrlen = sizeof (where_to->in6);
@@ -706,23 +707,7 @@ transmit_reply(CMD_Reply *msg, union sockaddr_in46 *where_to, int auth_len)
     unsigned short port;
     IPAddr ip;
 
-    switch (where_to->u.sa_family) {
-      case AF_INET:
-        ip.family = IPADDR_INET4;
-        ip.addr.in4 = ntohl(where_to->in4.sin_addr.s_addr);
-        port = ntohs(where_to->in4.sin_port);
-        break;
-#ifdef HAVE_IPV6
-      case AF_INET6:
-        ip.family = IPADDR_INET6;
-        memcpy(ip.addr.in6, (where_to->in6.sin6_addr.s6_addr), sizeof(ip.addr.in6));
-        port = ntohs(where_to->in6.sin6_port);
-        break;
-#endif
-      default:
-        assert(0);
-    }
-
+    UTI_SockaddrToIPAndPort(&where_to->u, &ip, &port);
     DEBUG_LOG(LOGF_CmdMon, "Could not send response to %s:%hu", UTI_IPToString(&ip), port);
   }
 }
@@ -925,20 +910,32 @@ handle_modify_maxupdateskew(CMD_Request *rx_message, CMD_Reply *tx_message)
 /* ================================================== */
 
 static void
+handle_modify_makestep(CMD_Request *rx_message, CMD_Reply *tx_message)
+{
+  REF_ModifyMakestep(ntohl(rx_message->data.modify_makestep.limit),
+                     UTI_FloatNetworkToHost(rx_message->data.modify_makestep.threshold));
+  tx_message->status = htons(STT_SUCCESS);
+}
+
+/* ================================================== */
+
+static void
 handle_settime(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
   struct timeval ts;
   long offset_cs;
   double dfreq_ppm, new_afreq_ppm;
   UTI_TimevalNetworkToHost(&rx_message->data.settime.ts, &ts);
-  if (MNL_AcceptTimestamp(&ts, &offset_cs, &dfreq_ppm, &new_afreq_ppm)) {
+  if (!MNL_IsEnabled()) {
+    tx_message->status = htons(STT_NOTENABLED);
+  } else if (MNL_AcceptTimestamp(&ts, &offset_cs, &dfreq_ppm, &new_afreq_ppm)) {
     tx_message->status = htons(STT_SUCCESS);
     tx_message->reply = htons(RPY_MANUAL_TIMESTAMP);
     tx_message->data.manual_timestamp.centiseconds = htonl((int32_t)offset_cs);
     tx_message->data.manual_timestamp.dfreq_ppm = UTI_FloatHostToNetwork(dfreq_ppm);
     tx_message->data.manual_timestamp.new_afreq_ppm = UTI_FloatHostToNetwork(new_afreq_ppm);
   } else {
-    tx_message->status = htons(STT_NOTENABLED);
+    tx_message->status = htons(STT_FAILED);
   }
 }
 
@@ -1056,7 +1053,7 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
         tx_message->data.source_data.flags = htons(RPY_SD_FLAG_PREFER);
         break;
       case RPT_NOSELECT:
-        tx_message->data.source_data.flags = htons(RPY_SD_FLAG_PREFER);
+        tx_message->data.source_data.flags = htons(RPY_SD_FLAG_NOSELECT);
         break;
     }
     tx_message->data.source_data.reachability = htons(report.reachability);
@@ -1261,6 +1258,10 @@ handle_add_source(NTP_Source_Type type, CMD_Request *rx_message, CMD_Reply *tx_m
   params.min_stratum = SRC_DEFAULT_MINSTRATUM;       
   params.poll_target = SRC_DEFAULT_POLLTARGET;
   params.max_delay_dev_ratio = SRC_DEFAULT_MAXDELAYDEVRATIO;
+  params.version = NTP_VERSION;
+  params.max_sources = SRC_DEFAULT_MAXSOURCES;
+  params.min_samples = SRC_DEFAULT_MINSAMPLES;
+  params.max_samples = SRC_DEFAULT_MAXSAMPLES;
 
   status = NSR_AddSource(&rem_addr, type, &params);
   switch (status) {
@@ -1464,7 +1465,7 @@ handle_client_accesses_by_index(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
   CLG_Status result;
   RPT_ClientAccessByIndex_Report report;
-  unsigned long first_index, n_indices, last_index, n_indices_in_table;
+  unsigned long first_index, n_indices, n_indices_in_table;
   int i, j;
   struct timeval now;
 
@@ -1472,16 +1473,15 @@ handle_client_accesses_by_index(CMD_Request *rx_message, CMD_Reply *tx_message)
 
   first_index = ntohl(rx_message->data.client_accesses_by_index.first_index);
   n_indices = ntohl(rx_message->data.client_accesses_by_index.n_indices);
-  last_index = first_index + n_indices - 1;
+  if (n_indices > MAX_CLIENT_ACCESSES)
+    n_indices = MAX_CLIENT_ACCESSES;
 
   tx_message->status = htons(STT_SUCCESS);
   tx_message->reply = htons(RPY_CLIENT_ACCESSES_BY_INDEX);
 
-  for (i = first_index, j = 0;
-       (i <= last_index) && (j < MAX_CLIENT_ACCESSES);
-       i++) {
-
-    result = CLG_GetClientAccessReportByIndex(i, &report, now.tv_sec, &n_indices_in_table);
+  for (i = 0, j = 0; i < n_indices; i++) {
+    result = CLG_GetClientAccessReportByIndex(first_index + i, &report,
+                                              now.tv_sec, &n_indices_in_table);
     tx_message->data.client_accesses_by_index.n_indices = htonl(n_indices_in_table);
 
     switch (result) {
@@ -1507,7 +1507,7 @@ handle_client_accesses_by_index(CMD_Request *rx_message, CMD_Reply *tx_message)
     }
   }
 
-  tx_message->data.client_accesses_by_index.next_index = htonl(i);
+  tx_message->data.client_accesses_by_index.next_index = htonl(first_index + i);
   tx_message->data.client_accesses_by_index.n_clients = htonl(j);
 }
 
@@ -1557,8 +1557,11 @@ handle_manual_delete(CMD_Request *rx_message, CMD_Reply *tx_message)
 static void
 handle_make_step(CMD_Request *rx_message, CMD_Reply *tx_message)
 {
-  LCL_MakeStep();
-  tx_message->status = htons(STT_SUCCESS);
+  if (!LCL_MakeStep()) {
+    tx_message->status = htons(STT_FAILED);
+  } else {
+    tx_message->status = htons(STT_SUCCESS);
+  }
 }
 
 /* ================================================== */
@@ -1653,24 +1656,17 @@ read_from_cmd_socket(void *anything)
   LCL_ReadRawTime(&now);
   LCL_CookTime(&now, &cooked_now, NULL);
 
-  switch (where_from.u.sa_family) {
-    case AF_INET:
-      remote_ip.family = IPADDR_INET4;
-      remote_ip.addr.in4 = ntohl(where_from.in4.sin_addr.s_addr);
-      remote_port = ntohs(where_from.in4.sin_port);
-      localhost = (remote_ip.addr.in4 == 0x7f000001UL);
+  UTI_SockaddrToIPAndPort(&where_from.u, &remote_ip, &remote_port);
+
+  /* Check if it's a loopback address (127.0.0.1 or ::1) */
+  switch (remote_ip.family) {
+    case IPADDR_INET4:
+      localhost = remote_ip.addr.in4 == INADDR_LOOPBACK;
       break;
-#ifdef HAVE_IPV6
-    case AF_INET6:
-      remote_ip.family = IPADDR_INET6;
-      memcpy(&remote_ip.addr.in6, where_from.in6.sin6_addr.s6_addr,
-          sizeof (remote_ip.addr.in6));
-      remote_port = ntohs(where_from.in6.sin6_port);
-      /* Check for ::1 */
-      for (localhost = 0; localhost < 16; localhost++)
-        if (remote_ip.addr.in6[localhost] != 0)
-          break;
-      localhost = (localhost == 15 && remote_ip.addr.in6[localhost] == 1);
+#ifdef FEAT_IPV6
+    case IPADDR_INET6:
+      localhost = !memcmp(remote_ip.addr.in6, &in6addr_loopback,
+                          sizeof (in6addr_loopback));
       break;
 #endif
     default:
@@ -1955,6 +1951,10 @@ read_from_cmd_socket(void *anything)
 
         case REQ_MODIFY_MAXUPDATESKEW:
           handle_modify_maxupdateskew(&rx_message, &tx_message);
+          break;
+
+        case REQ_MODIFY_MAKESTEP:
+          handle_modify_makestep(&rx_message, &tx_message);
           break;
 
         case REQ_LOGON:

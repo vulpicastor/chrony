@@ -56,34 +56,30 @@ Copyright @copyright{} 2009-2014 Miroslav Lichvar
 @c {{{ S:Overview
 @node Overview
 @section Overview
-Chrony is a software package for maintaining the accuracy of computer
-system clocks.  It consists of a pair of programs :
+chrony is a versatile implementation of the Network Time Protocol (NTP).
+It can synchronize the system clock with NTP servers, reference clocks
+(e.g. GPS receiver), and manual input using wristwatch and keyboard.
+It can also operate as an NTPv4 (RFC 5905) server and peer to provide
+a time service to other computers in the network.
 
-@itemize @bullet
-@item @code{chronyd}.  This is a daemon which runs in background on the
-system.  It obtains measurements (e.g. via the network) of the system's
-offset relative to other systems, and adjusts the system time
-accordingly.  For isolated systems, the user can periodically enter the
-correct time by hand (using @code{chronyc}).  In either case,
-@code{chronyd} determines the rate at which the computer gains or loses
-time, and compensates for this.
+It is designed to perform well in a wide range of conditions, including
+intermittent network connections, heavily congested networks, changing
+temperatures (ordinary computer clocks are sensitive to temperature),
+and systems that do not run continuosly, or run on a virtual machine.
 
-@code{chronyd} can also act as an NTP server, and provide a time-of-day service
-to other computers.  A typical set-up is to run @code{chronyd} on a gateway
-computer that has a dial-up link to the Internet, and use it to serve time to
-computers on a private LAN sitting behind the gateway.  The IP addresses that
-can act as clients of @code{chronyd} can be tightly controlled.  The default is
-no client access.
+Typical accuracy between two machines on a LAN is in tens, or a few
+hundreds, of microseconds; over the Internet, accuracy is typically
+within a few milliseconds.  With a good hardware reference clock
+sub-microsecond accuracy is possible.
 
-@item @code{chronyc}.  This is a command-line driven control and
-monitoring program.  An administrator can use this to fine-tune various
-parameters within the daemon, add or delete servers etc whilst the
-daemon is running.
+Two programs are included in chrony, @code{chronyd} is a daemon that can
+be started at boot time and @code{chronyc} is a command-line interface
+program which can be used to monitor @code{chronyd}'s performance and to
+change various operating parameters whilst it is running.
 
 The IP addresses from which @code{chronyc} clients may connect can be tightly
 controlled.  The default is just the computer that @code{chronyd} itself is
 running on.
-@end itemize
 @c }}}
 @c {{{ S:Acknowledgments
 @node Acknowledgements
@@ -94,10 +90,9 @@ Data Security, Inc. MD5 Message-Digest Algorithm} for authenticating
 messages between different machines on the network.
 
 In writing the @code{chronyd} program, extensive use has been made of
-RFC1305, written by David Mills.  The @code{ntp} suite's source code has
-been occasionally used to check details of the protocol that the RFC did
-not make absolutely clear.  The core algorithms in @code{chronyd} are
-all completely distinct from @code{ntp}, however.
+RFC 1305 and RFC 5905, written by David Mills.  The source code of
+the NTP reference implementation has been used to check details of the
+protocol.
 @c }}}
 @c {{{ S:Availability
 @node Availability
@@ -124,24 +119,10 @@ different operating systems may provide different function calls to
 achieve this, and even where the same function is used it may have
 different quirks in its behaviour.
 
-The software is known to work in the following environments:
-@itemize @bullet
-@item Linux 2.2 and newer
-
-@item NetBSD
-@item BSD/386
-
-@item Solaris 2.3/2.5/2.5.1/2.6/2.7/2.8 on Sparc (Sparc 20, Ultrasparc) and
-i386
-
-@item SunOS 4.1.4 on Sparc 2 and Sparc20.
-@end itemize
-
-Closely related systems may work too, but they have not been tested.
-
-Porting the software to other system (particularly to those supporting
-an @code{adjtime} system call) should not be difficult, however it
-requires access to such systems to test out the driver.
+The software is known to work on Linux, FreeBSD, NetBSD and Solaris.  Closely
+related systems may work too.  Porting the software to other systems
+(particularly to those supporting an @code{adjtime} system call) should not be
+difficult, however it requires access to such systems to test out the driver.
 @c }}}
 @c {{{ S:Other programs
 @node Other time synchronisation packages
@@ -211,11 +192,10 @@ Things @code{ntpd} can do that @code{chronyd} can't:
 
 @itemize @bullet
 @item
-@code{ntpd} fully supports NTP version 4 (RFC5905), including broadcast,
-multicast, manycast clients / servers and the orphan mode.  It also
-supports extra authentication schemes based on public-key cryptography
-(RFC5906). @code{chronyd} uses NTP version 3 (RFC1305), which is
-compatible with version 4.
+@code{ntpd} supports all operating modes from RFC 5905, including
+broadcast, multicast and manycast client / server.  It supports the
+orphan mode and it also supports authentication based on public-key
+cryptography described in RFC 5906.
 
 @item
 @code{ntpd} has been ported to more types of computer / operating
@@ -307,8 +287,7 @@ Particular areas that need addressing are :
 @item Porting to other Unices
 
 This involves creating equivalents of sys_solaris.c, sys_linux.c etc for the
-new system.  Note, the Linux driver has been reported as working on a range of
-different architectures (Alpha, Sparc, MIPS as well as x86 of course).
+new system.
 
 @item Porting to Windows NT
 
@@ -432,15 +411,15 @@ install-info /usr/local/share/info/chrony.info /usr/share/info/dir
     
 Now that the software is successfully installed, the next step is to
 set up a configuration file.  The default location of the file
-is @file{@SYSCONFDIR@/chrony.conf}.  Suppose you want to use public NTP
-servers from the pool.ntp.org project as your time reference.  A
+is @file{@SYSCONFDIR@/chrony.conf}.  Several examples of configuration with
+comments are included in the examples directory.  Suppose you want to use
+public NTP servers from the pool.ntp.org project as your time reference.  A
 minimal useful configuration file could be
 
 @example
-server 0.pool.ntp.org iburst
-server 1.pool.ntp.org iburst
-server 2.pool.ntp.org iburst
+pool pool.ntp.org iburst
 makestep 10 3
+rtcsync
 @end example
 
 Then, @code{chronyd} can be run.
@@ -575,28 +554,42 @@ use their facilities.
 
 Assuming that you have found some servers, you need to set up a
 configuration file to run chrony.  The (compiled-in) default location
-for this file is @file{@SYSCONFDIR@/chrony.conf}.  Assuming that your ntp
-servers are called @code{a.b.c} and @code{d.e.f}, your
-@file{chrony.conf} file could contain as a minimum
+for this file is @file{@SYSCONFDIR@/chrony.conf}.  Assuming that your NTP
+servers are called @code{foo.example.net}, @code{bar.example.net} and
+@code{baz.example.net}, your @file{chrony.conf} file could contain as a minimum
 
 @example
-server a.b.c
-server d.e.f
-server g.h.i
+server foo.example.net
+server bar.example.net
+server baz.example.net
 @end example
 
 However, you will probably want to include some of the other directives
-described later.  The @code{driftfile} and @code{makestep} directives may be
-particularly useful.  Also, the @code{iburst} server option is useful to speed
-up the initial synchronization.  The smallest useful configuration file would
-look something like
+described later.  The following directives may be particularly useful :
+@code{driftfile}, @code{makestep}, @code{rtcsync}.  Also, the @code{iburst}
+server option is useful to speed up the initial synchronization.  The smallest
+useful configuration file would look something like
 
 @example
-server a.b.c iburst
-server d.e.f iburst
-server g.h.i iburst
+server foo.example.net iburst
+server bar.example.net iburst
+server baz.example.net iburst
 driftfile @CHRONYVARDIR@/drift
 makestep 10 3
+rtcsync
+@end example
+
+When using a pool of NTP servers (one name is used for multiple servers which
+may change over time), it's better to specify them with the @code{pool}
+directive instead of multiple @code{server} directives in order to allow
+@code{chronyd} to replace unreachable or bad servers automatically.  The
+configuration file could in this case look like
+
+@example
+pool pool.ntp.org iburst
+driftfile @CHRONYVARDIR@/drift
+makestep 10 3
+rtcsync
 @end example
 @c }}}
 @c {{{ S:Infrequent connection
@@ -620,14 +613,14 @@ In this case, you will need some additional configuration to tell
 This saves the program from continuously trying to poll the servers when
 they are inaccessible.
 
-Again, assuming that your ntp servers are called @code{a.b.c} and
-@code{d.e.f}, your @file{chrony.conf} file would need to contain
-something like
+Again, assuming that your NTP servers are called @code{foo.example.net},
+@code{bar.example.net} and @code{baz.example.net}, your @file{chrony.conf} file
+would need to contain something like
 
 @example
-server a.b.c
-server d.e.f
-server g.h.i
+server foo.example.net
+server bar.example.net
+server baz.example.net
 @end example
 
 However, your computer will keep trying to contact the servers to obtain
@@ -639,9 +632,9 @@ For this reason, it would be better to specify this part of your
 configuration file in the following way:
 
 @example
-server a.b.c offline
-server d.e.f offline
-server g.h.i offline
+server foo.example.net offline
+server bar.example.net offline
+server baz.example.net offline
 @end example
 
 The @code{offline} keyword indicates that the servers start
@@ -658,9 +651,9 @@ automatically on the first @code{chronyd} start.
 The smallest useful configuration file would look something like
 
 @example
-server a.b.c offline
-server d.e.f offline
-server g.h.i offline
+server foo.example.net offline
+server bar.example.net offline
+server baz.example.net offline
 keyfile @SYSCONFDIR@/chrony.keys
 generatecommandkey
 driftfile @CHRONYVARDIR@/drift
@@ -873,9 +866,9 @@ For the @file{@SYSCONFDIR@/chrony.conf} file, the following can be used as an
 example.
 
 @example
-server 0.pool.ntp.org maxdelay 0.4 offline
-server 1.pool.ntp.org maxdelay 0.4 offline
-server 2.pool.ntp.org maxdelay 0.4 offline
+server foo.example.net maxdelay 0.4 offline
+server bar.example.net maxdelay 0.4 offline
+server baz.example.net maxdelay 0.4 offline
 logdir /var/log/chrony
 log statistics measurements tracking
 driftfile @CHRONYVARDIR@/drift
@@ -1000,9 +993,8 @@ configuration file.  This option is useful if you want to stop and
 restart @code{chronyd} briefly for any reason, e.g. to install a new
 version.  However, it only makes sense on systems where the kernel can
 maintain clock compensation whilst not under @code{chronyd's} control.
-The only version where this happens so far is Linux.  On systems where
-this is not the case, e.g. Solaris and SunOS the option should not be
-used.
+The only version where this happens so far is Linux.  On other systems
+this option should not be used.
 @item -R
 When this option is used, the @code{initstepslew} directive and the
 @code{makestep} directive used with a positive limit will be ignored.
@@ -1146,6 +1138,7 @@ the configuration file is ignored.
 * include directive::           Include a configuration file
 * initstepslew directive::      Trim the system clock on boot-up
 * keyfile directive::           Specify location of file containing keys
+* leapsecmode directive::       Select leap second handling mode
 * leapsectz directive::         Read leap second data from tz database
 * local directive::             Allow unsynchronised machine to act as server
 * lock_all directive::          Require that chronyd be locked into RAM
@@ -1162,9 +1155,11 @@ the configuration file is ignored.
 * maxslewrate directive::       Set maximum slew rate
 * maxupdateskew directive::     Stop bad estimates upsetting machine clock
 * minsamples directive::        Set minimum number of samples per source
+* minsources directive::        Set minimum number of selectable sources to update clock
 * noclientlog directive::       Prevent chronyd from gathering data about clients
 * peer directive::              Specify an NTP peer
 * pidfile directive::           Specify the file where chronyd's pid is written
+* pool directive::              Specify an NTP pool
 * port directive::              Set NTP server port
 * refclock directive::          Specify a reference clock
 * reselectdist directive::      Set improvement in distance needed to reselect a source
@@ -1175,6 +1170,7 @@ the configuration file is ignored.
 * rtcsync directive::           Specify that RTC should be automatically synchronised by kernel
 * sched_priority directive::    Require real-time scheduling and specify a priority for it
 * server directive::            Specify an NTP server
+* smoothtime directive::        Smooth served time to keep clients close together
 * stratumweight directive::     Specify how important is stratum when selecting source
 * tempcomp directive::          Specify temperature sensor and compensation coefficients
 * user directive::              Specify user for dropping root privileges
@@ -1231,7 +1227,7 @@ to other clients.
 Examples of use of the command are as follows:
 
 @example
-allow foo.bar.com
+allow foo.example.net
 allow 1.2
 allow 3.4.5
 allow 6.7.8/22
@@ -1316,47 +1312,32 @@ bindaddress 192.168.1.1
 
 to the configuration file.
 
-This directive affects NTP (UDP port 123 by default) packets.  If no
-@code{bindcmdaddress} directive is present, the address supplied by
-@code{bindaddress} will be used to control binding of the command socket (UDP
-port 323 by default) as well.
-
-The @code{bindaddress} directive has been found to cause problems when used on
-computers that need to pass NTP traffic over multiple network interfaces (e.g.
-firewalls).  It is, therefore, not particularly useful.  Use of the
-@code{allow} and @code{deny} directives together with a network firewall is
-more likely to be successful.
-
-For each of IPv4 and IPv6 protocols, only one @code{bindaddress}
-directive can be specified. 
+For each of IPv4 and IPv6 protocols, only one @code{bindaddress} directive can
+be specified.  Therefore, it's not useful on computers which should serve NTP
+on multiple network interfaces.
 @c }}}
 @c {{{ bindcmdaddress
 @node bindcmdaddress directive
 @subsection bindcmdaddress
-The @code{bindcmdaddress} directive allows you to restrict the network
+The @code{bindcmdaddress} directive allows you to specify the network
 interface to which @code{chronyd} will listen for command packets (issued by
 @code{chronyc}).  This provides an additional level of access restriction above
 that available through @code{cmddeny} mechanism.
 
-Suppose you want to block all access except from localhost.  You
-could add the lines
+By default, @code{chronyd} binds to the loopback interface (with addresses
+@code{127.0.0.1} and @code{::1}).  This blocks all access except from
+localhost.  To listen for command packets on all interfaces, you can add the
+lines
 
 @example
-bindcmdaddress 127.0.0.1
-bindcmdaddress ::1
+bindcmdaddress 0.0.0.0
+bindcmdaddress ::
 @end example
 
 to the configuration file.
 
 For each of IPv4 and IPv6 protocols, only one @code{bindcmdaddress}
 directive can be specified.
-
-The default values are set by the @code{bindaddress} directive.
-
-The @code{bindcmdaddress} directive has been found to cause problems when used
-on computers that need to pass command traffic over multiple network
-interfaces.  Use of the @code{cmdallow} and @code{cmddeny} directives together
-with a network firewall is more likely to be successful.
 @c }}}
 @c {{{ broadcast directive
 @node broadcast directive
@@ -1424,6 +1405,10 @@ The syntax is identical to the @code{allow} directive.
 There is also a @code{cmdallow all} directive with similar behaviour to the
 @code{allow all} directive (but applying to control access in this case, of
 course).
+
+Note that @code{chronyd} has to be configured with the @code{bindcmdaddress}
+directive to not listen only on the loopback interface to actually allow remote
+access.
 @c }}}
 @c {{{ cmddeny
 @node cmddeny directive
@@ -1633,14 +1618,13 @@ the program exits.  (See the dumpdir command above).
 @subsection fallbackdrift
 Fallback drifts are long-term averages of the system clock drift
 calculated over exponentially increasing intervals.  They are used
-when the clock is unsynchronised to avoid quickly drifting away from
-true time if there was a short-term deviation in drift before the
-synchronisation was lost.
+when the clock is no longer synchronised to avoid quickly drifting
+away from true time if there was a short-term deviation in the drift
+before the synchronisation was lost.
 
-The directive specifies the minimum and maximum interval for how long
-the system clock has to be unsynchronised to switch between fallback
-drifts.  They are defined as a power of 2 (in seconds).  The syntax is
-as follows
+The directive specifies the minimum and maximum interval since last
+clock update to switch between fallback drifts.  They are defined as a
+power of 2 (in seconds).  The syntax is as follows
 
 @example
 fallbackdrift 16 19
@@ -1648,13 +1632,13 @@ fallbackdrift 16 19
 
 In this example, the minimum interval is 16 (18 hours) and maximum
 interval is 19 (6 days).  The system clock frequency will be set to
-the first fallback 18 hours after the synchronisation was lost, to the
+the first fallback 18 hours after last clock update, to the
 second after 36 hours, etc.  This might be a good setting to cover
 daily and weekly temperature fluctuations.
 
 By default (or if the specified maximum or minimum is 0), no fallbacks
-will be used and the clock frequency will stay at the last value
-calculated before synchronisation was lost.
+are used and the clock frequency changes only with new measurements from
+NTP, reference clocks or manual input.
 @c }}}
 @c {{{ generatecommandkey
 @node generatecommandkey directive
@@ -1722,7 +1706,7 @@ used instead.  This makes it easier to restart @code{chronyd} whilst the
 system is in normal operation.
 
 The @code{initstepslew} directive takes a threshold and a list of NTP
-servers as arguments.  A maximum of 8 will be used.  Each of the servers
+servers as arguments.  Each of the servers
 is rapidly polled several times, and a majority voting mechanism used to
 find the most likely range of system clock error that is present.  A
 step (or slew) is applied to the system clock to correct this error.
@@ -1731,7 +1715,7 @@ step (or slew) is applied to the system clock to correct this error.
 An example of use of the command is
 
 @example
-initstepslew 30 foo.bar.com baz.quz.com
+initstepslew 30 foo.example.net bar.example.net
 @end example
 
 where 2 NTP servers are used to make the measurement.  The @code{30}
@@ -1804,6 +1788,62 @@ the configured hash function, e.g. 160 bits with SHA1.
 The ID for the chronyc authentication key is specified with the commandkey
 command (see earlier). The command key can be generated automatically on
 start with the @code{generatecommandkey} directive.
+@c }}}
+@c {{{ leapsecmode
+@node leapsecmode directive
+@subsection leapsecmode
+This directive selects how @code{chronyd} handles leap seconds.  The Unix time
+doesn't include leap seconds.  When a leap second is applied to UTC, the system
+clock is off by one second and it needs to be corrected.
+
+There are four options:
+
+@table @code
+@item system
+The kernel steps the system clock backwards by one second at 0:00:00 UTC
+(before correction) when leap second is inserted or steps forward by one second
+at 23:59:59 UTC when leap second is deleted.  This is the default mode when the
+system driver supports leap seconds (currently Linux only).
+@item step
+This is similar to the system mode, except the clock is stepped by
+@code{chronyd} instead of the kernel.  This is the default mode when the system
+driver doesn't support leap seconds.
+@item slew
+The clock is corrected by slew starting at 0:00:00 UTC when leap second is
+inserted or 23:59:59 UTC when leap second is deleted.  This may be preferred
+over the system or step mode when applications running on the system are
+sensitive to jumps in the system time and it's acceptable that the clock will
+be off for a longer time.  On Linux with the default @code{maxslewrate} the
+correction takes 12 seconds.  Note that unless the @code{smoothtime} directive
+is used (@pxref{smoothtime directive}), there will still be a jump in the time
+that @code{chronyd} serves to NTP clients.  With the @code{smoothtime}
+directive, the leap second status will not be passed to NTP clients and the
+leap second will be "smeared" instead.
+@item ignore
+No correction is applied to the clock for the leap second.  The clock will be
+corrected later in normal operation when new measurements are made and the
+estimated offset includes the one second error.
+@end table
+
+An example of the command is
+
+@example
+leapsecmode slew
+@end example
+
+An example enabling the leap smear for NTP clients with the @code{smoothtime}
+directive could be
+
+@example
+leapsecmode slew
+smoothtime 400 0.001
+@end example
+
+With this configuration the NTP clients would not know there was any leap
+second.  The server time they follow would be slowly corrected in about 16
+hours after the leap second was applied to UTC.  This configuration should not
+be used if the clients poll also other NTP servers, because they could reject
+this server as a falseticker or could fail to select a source completely.
 @c }}}
 @c {{{ leapsectz
 @node leapsectz directive
@@ -1935,7 +1975,7 @@ An example line (which actually appears as a single line in the file)
 from the measurements log file is shown below.
 
 @example
-2010-12-22 05:40:50 158.152.1.76    N  8 1111 111 1111 10 10 1.0 \
+2014-10-13 05:40:50 158.152.1.76    N  2 111 111 1111  10 10 1.0 \
    -4.966e-03  2.296e-01  1.577e-05  1.615e-01  7.446e-03
 @end example
 
@@ -1944,7 +1984,7 @@ values from the example line above) :
 
 @enumerate 1
 @item
-Date [2010-12-22]
+Date [2014-10-13]
 @item
 Hour:Minute:Second [05:40:50].  Note that the date/time pair is
 expressed in UTC, not the local time zone.
@@ -1958,12 +1998,13 @@ currently synchronised.) [N]
 @item
 Stratum of remote computer. [2]
 @item
-RFC1305 tests 1 through 4 (1=pass, 0=fail) [1111]
+RFC 5905 tests 1 through 3 (1=pass, 0=fail) [111]
+@item
+RFC 5905 tests 5 through 7 (1=pass, 0=fail) [111]
 @item
 Tests for maximum delay, maximum delay ratio and maximum delay dev ratio,
-against defined parameters (1=pass, 0=fail) [111]
-@item
-RFC1305 tests 5 through 8 (1=pass, 0=fail) [1111]
+against defined parameters, and a test for synchronisation loop
+(1=pass, 0=fail) [1111]
 @item
 Local poll [10]
 @item
@@ -1973,15 +2014,16 @@ Remote poll [10]
 to increase or decrease the polling level.  This is adjusted based on number
 of measurements currently being used for the regression algorithm). [1.0]
 @item
-The estimated local clock error (`theta' in RFC1305).  Positive indicates that the local clock is slow. [-4.966e-03].
+The estimated local clock error (`theta' in RFC 5905).  Positive
+indicates that the local clock is slow of the remote source. [-4.966e-03].
 @item
-The peer delay (`delta' in RFC1305). [2.296e-01]
+The peer delay (`delta' in RFC 5905). [2.296e-01]
 @item
-The peer dispersion (`epsilon' in RFC1305). [1.577e-05]
+The peer dispersion (`epsilon' in RFC 5905). [1.577e-05]
 @item
-The root delay (`Delta' in RFC1305). [1.615e-01]
+The root delay (`DELTA' in RFC 5905). [1.615e-01]
 @item
-The root dispersion (`E' in RFC1305). [7.446e-03]
+The root dispersion (`EPSILON' in RFC 5905). [7.446e-03]
 @end enumerate
 
 A banner is periodically written to the log file to indicate the
@@ -2373,9 +2415,11 @@ crystal oscillator.
 @c {{{ maxsamples
 @node maxsamples directive
 @subsection maxsamples
-The @code{maxsamples} directive sets the maximum number of samples
-@code{chronyd} should keep for each source. The default is 0, which
-disables the configurable limit, and the useful range is 4 to 64.
+The @code{maxsamples} directive sets the default maximum number of samples
+@code{chronyd} should keep for each source.  This setting can be overriden for
+individual sources in the @code{server} and @code{refclock} directives
+(@pxref{server directive}, @pxref{refclock directive}).  The default value is
+0, which disables the configurable limit.  The useful range is 4 to 64.
 
 The syntax is
 
@@ -2437,14 +2481,33 @@ the new master estimate.
 @c {{{ minsamples
 @node minsamples directive
 @subsection minsamples
-The @code{minsamples} directive sets the minimum number of samples
-@code{chronyd} should try to keep for each source. The default is 0 and the
-useful range is 4 to 64.
+The @code{minsamples} directive sets the default minimum number of samples
+@code{chronyd} should keep for each source.  This setting can be overriden for
+individual sources in the @code{server} and @code{refclock} directives
+(@pxref{server directive}, @pxref{refclock directive}).  The default value is
+0.  The useful range is 4 to 64.
 
 The syntax is
 
 @example
 minsamples <samples>
+@end example
+@c }}}
+@c {{{ minsources
+@node minsources directive
+@subsection minsources
+The @code{minsources} directive sets the minimum number of sources that need
+to be considered as selectable in the source selection algorithm before the
+local clock is updated.  The default value is 1.
+
+Setting this option to a larger number can be used to improve the reliability.
+More sources will have to agree with each other and the clock will not be
+updated when only one source (which could be serving wrong time) is reachable.
+
+The syntax is
+
+@example
+minsources <sources>
 @end example
 @c }}}
 @c {{{ noclientlog
@@ -2460,6 +2523,21 @@ be reported using the @code{clients} command in @code{chronyc}.
 The syntax of this directive is identical to that for the @code{server}
 directive (@pxref{server directive}), except that it is used to specify
 an NTP peer rather than an NTP server.
+
+Please note that NTP peers that are not configured with a key to enable
+authentication are vulnerable to a denial-of-service attack.  An attacker
+knowing that NTP hosts A and B are peering with each other can send a packet
+with random timestamps to host A with source address of B which will set the
+NTP state variables on A to the values sent by the attacker.  Host A will then
+send on its next poll to B a packet with originate timestamp that doesn't match
+the transmit timestamp of B and the packet will be dropped.  If the attacker
+does this periodically for both hosts, they won't be able to synchronize to
+each other.
+
+This attack can be prevented by enabling authentication with the key option, or
+using the @code{server} directive on both sides to specify the other host as a
+server instead of peer, the only drawback is that it will double the network
+traffic between the two hosts.
 @c }}}
 @c {{{ pidfile
 @node pidfile directive
@@ -2470,14 +2548,42 @@ chronyd always writes its process ID (pid) to a file, and checks this file on st
 pidfile /var/tmp/chronyd.pid
 @end example
 @c }}}
+@c {{{ pool
+@node pool directive
+@subsection pool
+The syntax of this directive is similar to that for the @code{server}
+directive (@pxref{server directive}), except that it is used to specify a pool
+of NTP servers rather than a single NTP server.  The pool name is expected to
+resolve to multiple addresses which may change over time.
+
+All options valid in the @code{server} directive can be used in this directive
+too.  There is one option specific to @code{pool} directive: @code{maxsources}
+sets the maximum number of sources that can be used from the pool, the default
+value is 4.
+
+On start, when the pool name is resolved, @code{chronyd} will add up to 16
+sources, one for each resolved address.  When the number of sources from which
+at least one valid reply was received reaches @code{maxsources}, the other
+sources will be removed.  When a pool source is unreachable or marked as
+falseticker, @code{chronyd} will try to replace the source with a newly
+resolved address of the pool.
+
+An example of the pool directive is
+
+@example
+pool pool.ntp.org iburst maxsources 3
+@end example
+@c }}}
 @c {{{ port
 @node port directive
 @subsection port
 This option allows you to configure the port on which @code{chronyd}
-will listen for NTP requests.
+will listen for NTP requests.  The port will be open only when an address is
+allowed by the @code{allow} directive or command, an NTP peer is configured, or
+the broadcast server mode is enabled.
 
 The compiled in default is udp/123, the standard NTP port.  If set to 0,
-@code{chronyd} will not open the server socket and will operate strictly in a
+@code{chronyd} will never open the server port and will operate strictly in a
 client-only mode.  The source port used in NTP client requests can be set by
 the @code{acquisitionport} directive.
 
@@ -2624,6 +2730,12 @@ Prefer this source over sources without prefer option.
 @item noselect
 Never select this source.  This is useful for monitoring or with sources
 which are not very accurate, but are locked with a PPS refclock.
+@item minsamples
+Set the minimum number of samples kept for this source.  This overrides the
+@code{minsamples} directive (@pxref{minsamples directive}).
+@item maxsamples
+Set the maximum number of samples kept for this source.  This overrides the
+@code{maxsamples} directive (@pxref{maxsamples directive}).
 @end table
 
 @c }}}
@@ -2787,11 +2899,11 @@ required (the default is 123, the standard NTP port).
 Although @code{chronyd} will trim the rate at which it samples the
 server during normal operation, the user may wish to constrain the
 minimum polling interval.  This is always defined as a power of 2, so
-<tt/minpoll 5/ would mean that the polling interval cannot drop below 32
+@code{minpoll 5} would mean that the polling interval cannot drop below 32
 seconds.  The default is 6 (64 seconds).
 @item maxpoll
 In a similar way, the user may wish to constrain the maximum polling
-interval.  Again this is specified as a power of 2, so <tt/maxpoll 9/
+interval.  Again this is specified as a power of 2, @code{maxpoll 9}
 indicates that the polling interval must stay at or below 512 seconds.
 The default is 10 (1024 seconds).
 @item maxdelay
@@ -2811,9 +2923,9 @@ some sort).
 
 If the user knows that round trip delays above a certain level should
 cause the measurement to be ignored, this level can be defined with the
-maxdelay command.  For example, <tt/maxdelay 0.3/ would indicate that
+maxdelay command.  For example, @code{maxdelay 0.3} would indicate that
 measurements with a round-trip delay of 0.3 seconds or more should be
-ignored.
+ignored.  The default value is 3 seconds.
 
 @item maxdelayratio
 This option is similar to the maxdelay option above.  @code{chronyd}
@@ -2900,13 +3012,64 @@ Target number of measurements to use for the regression algorithm which
 @code{minpoll} and @code{maxpoll}.  A higher target makes @code{chronyd} prefer
 shorter polling intervals.  The default is 6 and a useful range is 6 to 60.
 
+@item version
+This option sets the NTP version number used in packets sent to the server.
+This can be useful when the server runs an old NTP implementation that doesn't
+respond to newer versions.  The default version number is 4.
+
 @item prefer
 Prefer this source over sources without prefer option.
 
 @item noselect
 Never select this source.  This is particularly useful for monitoring.
 
+@item minsamples
+Set the minimum number of samples kept for this source.  This overrides the
+@code{minsamples} directive (@pxref{minsamples directive}).
+
+@item maxsamples
+Set the maximum number of samples kept for this source.  This overrides the
+@code{maxsamples} directive (@pxref{maxsamples directive}).
+
 @end table
+@c }}}
+@c {{{ smoothtime
+@node smoothtime directive
+@subsection smoothtime
+The @code{smoothtime} directive can be used to enable smoothing of the time
+that @code{chronyd} serves to its clients to make it easier for them to track
+it and keep their clocks close together even when large offset or frequency
+corrections are applied to the server's clock, for example after being offline
+for a longer time.
+
+If a large offset has been accumulated, it may take a very long time to smooth
+it out.  This directive should be used only when the clients are not configured
+to poll also another NTP server, because they could reject this server as a
+falseticker or fail to select a source completely.
+
+The smoothing process is independent from any slewing applied to the local
+system clock, but the accumulated offset and frequency for smoothing will be
+reset when the clock is corrected by step, e.g. by the @code{makestep}
+directive or command.
+
+The directive takes two arguments, the maximum frequency offset of the smoothed
+time to the tracked NTP time (in ppm) and the maximum rate at which the
+frequency offset is allowed to change (in ppm per second).  The smoothing
+process is activated when 1/10000 of the estimated skew of the local clock
+falls below the maximum rate of frequency change.
+
+An example suitable for clients using @code{ntpd} and 1024 second polling
+interval could be
+
+@example
+smoothtime 400 0.001
+@end example
+
+An example suitable for clients using @code{chronyd} on Linux could be
+
+@example
+smoothtime 50000 0.01
+@end example
 @c }}}
 @c {{{ stratumweight
 @node stratumweight directive
@@ -2922,30 +3085,31 @@ The syntax is
 stratumweight <dist-in-seconds>
 @end example
 
-By default, it is 1 second.  This usually means that sources with lower stratum
-will be preferred to sources with higher stratum even when their distance is
-significantly worse.  Setting @code{stratumweight} to 0 makes @code{chronyd}
-ignore stratum when selecting the source.
+By default, the weight is 0.001 seconds.  This means that stratum of the
+sources in the selection process matters only when the differences between the
+distances are in milliseconds.
 
 @c }}}
 @c {{{ tempcomp
 @node tempcomp directive
 @subsection tempcomp
-Normally, changes in rate of drift of the system clock are caused mainly by
-changes in temperature of the crystal oscillator on the mainboard.
+Normally, changes in the rate of drift of the system clock are caused mainly by
+changes in the temperature of the crystal oscillator on the mainboard.
 
-If there are available temperature measurements from a sensor close to the
-oscillator, @code{tempcomp} directive can be used to compensate for the changes
-in rate and possibly improve clock accuracy.
+If there are temperature measurements available from a sensor close to the
+oscillator, the @code{tempcomp} directive can be used to compensate for the
+changes in the temperature and improve the stability and accuracy of the clock.
 
-Whether it will really help depends on many factors, including resolution of
-the sensor, noise in measurements, time source polling interval, compensation
-update interval, how good are the temperature coefficients, and how close is
-the sensor to the oscillator.  The frequency reported in tracking.log should
-be more stable and the offsets should be smaller.
+The result depends on many factors, including the resolution of the sensor,
+the amount of noise in the measurements, the polling interval of the time
+source, the compensation update interval, how well is the compensation
+specified, and how close is the sensor to the oscillator.  When it's working
+well, the frequency reported in the @file{tracking.log} file is more stable and
+the maximum reached offset is smaller.
 
-The directive has six parameters: path to the file which contains current
-temperature in text format, update interval (in seconds), and temperature
+There are two forms of the directive.  The first one has six parameters: a
+path to the file containing the current temperature from the sensor (in
+text format), the compensation update interval (in seconds), and temperature
 coefficients T0, k0, k1, k2.
 
 The frequency compensation is calculated (in ppm) as 
@@ -2953,23 +3117,48 @@ The frequency compensation is calculated (in ppm) as
 @code{k0 + (T - T0) * k1 + (T - T0)^2 * k2}
 
 The result has to be between -10 ppm and 10 ppm, otherwise the measurement is
-considered to be faulty and will be ignored.  The k0 coefficient can be used to
-get the results in that range.
-
-Valid measurements and calculated corrections are logged to tempcomp.log file if
-enabled with @code{log tempcomp} directive.
+considered invalid and will be ignored.  The k0 coefficient can be used to get
+the results in that range.
 
 An example of use is
 
 @example
-tempcomp /sys/class/hwmon/hwmon1/device/temp2_input 30 26000 0.0 0.000183 0.0
+tempcomp /sys/class/hwmon/hwmon0/temp2_input 30 26000 0.0 0.000183 0.0
 @end example
 
-The measured temperature will be read from the file in Linux sysfs filesystem
-every 30 seconds.  When the temperature is 26 degress (26000), the system clock
-frequency will not be adjusted.  When it is 27 degrees (27000), the clock will
-be set to run 0.183ppm faster than it would be without the compensation, etc.
+The measured temperature will be read from the file in the Linux sysfs
+filesystem every 30 seconds.  When the temperature is 26000 (26 degrees
+Celsius), the frequency correction will be zero.  When it is 27000 (27 degrees
+Celsius), the clock will be set to run 0.183ppm faster, etc.
 
+The second form has three parameters, the path to the sensor file, the update
+interval and a path to a file containing a list of (temperature, compensation)
+points, from which the compensation is linearly interpolated or extrapolated.
+
+An example is
+
+@example
+tempcomp /sys/class/hwmon/hwmon0/temp2_input 30 /etc/chrony.tempcomp
+@end example
+
+where the @file{chrony.tempcomp} file could have
+
+@example
+20000 1.0
+21000 0.64
+22000 0.36
+23000 0.16
+24000 0.04
+25000 0.0
+26000 0.04
+27000 0.16
+28000 0.36
+29000 0.64
+30000 1.0
+@end example
+
+Valid measurements with corresponding compensations are logged to the
+@file{tempcomp.log} file if enabled by the @code{log tempcomp} directive.
 @c }}}
 @c {{{ user
 @node user directive
@@ -3137,7 +3326,7 @@ interface.
 * exit command::                Exit from chronyc
 * help command::                Generate help summary
 * local command::               Let computer be a server when it is unsynchronised
-* makestep command::            Immediately correct the system clock instead of slewing
+* makestep command::            Correct the system clock by stepping instead of slewing
 * manual command::              Enable/disable/configure options for settime
 * maxdelay command::            Set max measurement delay for a source
 * maxdelaydevratio command::    Set max measurement delay for a source as ratio to deviation
@@ -3175,7 +3364,7 @@ Examples of use, showing a named host and a numeric IP address, are as
 follows:
 
 @example
-accheck a.b.c
+accheck foo.example.net
 accheck 1.2.3.4
 accheck 2001:db8::1
 @end example
@@ -3216,13 +3405,16 @@ The @code{add peer} command allows a new NTP peer to be added whilst
 @code{chronyd} is running.
 
 Following the words @code{add peer}, the syntax of the following
-parameters and options is identical to that for the @code{peer}
+parameters and options is similar to that for the @code{peer}
 directive in the configuration file (@pxref{peer directive}).
+The following peer options can be set in the command:
+@code{port}, @code{minpoll}, @code{maxpoll}, @code{presend},
+@code{maxdelayratio}, @code{maxdelay}, @code{key}
 
 An example of using this command is shown below.
 
 @example
-add peer foo.bar.com minpoll 6 maxpoll 10 authkey 25
+add peer foo.example.net minpoll 6 maxpoll 10 key 25
 @end example
 @c }}}
 @c {{{ add server
@@ -3232,13 +3424,16 @@ The @code{add server} command allows a new NTP server to be added whilst
 @code{chronyd} is running.
 
 Following the words @code{add server}, the syntax of the following
-parameters and options is identical to that for the @code{server}
+parameters and options is similar to that for the @code{server}
 directive in the configuration file (@pxref{server directive}).
+The following server options can be set in the command:
+@code{port}, @code{minpoll}, @code{maxpoll}, @code{presend},
+@code{maxdelayratio}, @code{maxdelay}, @code{key}
 
 An example of using this command is shown below.
 
 @example
-add server foo.bar.com minpoll 6 maxpoll 10 authkey 25
+add server foo.example.net minpoll 6 maxpoll 10 key 25
 @end example
 @c }}}
 @c {{{ allow all
@@ -3256,7 +3451,7 @@ the configuration file (@pxref{allow directive}).
 The syntax is illustrated in the following examples:
 
 @example
-allow foo.bar.com
+allow foo.example.net
 allow 1.2
 allow 3.4.5
 allow 6.7.8/22
@@ -3371,7 +3566,7 @@ whose IPv6 addresses have first 48 bits equal to @code{2001:db8:789a}.
 Example of the three-argument form of the command is
 
 @example
-burst 2/10 foo.bar.com
+burst 2/10 foo.example.net
 @end example
 @c }}}
 @c {{{ clients
@@ -3435,7 +3630,7 @@ used to check whether command access is permitted from a named host.
 Examples of use are as follows:
 
 @example
-cmdaccheck a.b.c
+cmdaccheck foo.example.net
 cmdaccheck 1.2.3.4
 cmdaccheck 2001:db8::1
 @end example
@@ -3493,7 +3688,7 @@ from the current set of sources.
 The syntax is illustrated in the examples below.
 
 @example
-delete foo.bar.com
+delete foo.example.net
 delete 1.2.3.4
 delete 2001:db8::1
 @end example
@@ -3516,7 +3711,7 @@ directive in the configuration file (@pxref{deny directive}).
 The syntax is illustrated in the following examples:
 
 @example
-deny foo.bar.com
+deny foo.example.net
 deny 1.2
 deny 3.4.5
 deny 6.7.8/22
@@ -3608,17 +3803,27 @@ offset, by slowing down or speeding up the clock as required.  In
 certain situations, the system clock may be so far adrift that this
 slewing process would take a very long time to correct the system clock.
 
-The @code{makestep} command can be used in this situation.  It cancels
-any remaining correction that was being slewed, and jumps the system
-clock by the equivalent amount, making it correct immediately.
+The @code{makestep} command can be used in this situation.  There are two forms
+of the command.  The first form has no parameters.  It tells @code{chronyd} to
+cancel any remaining correction that was being slewed and jump the system clock
+by the equivalent amount, making it correct immediately.
+
+The second form configures the automatic stepping, similarly to the
+@code{makestep} directive (@pxref{makestep directive}).  It has two parameters,
+stepping threshold (in seconds) and number of future clock updates for which
+will be the threshold active.  This can be used with the @code{burst} command
+to quickly make a new measurement and correct the clock by stepping if needed,
+without waiting for @code{chronyd} to complete the measurement and update the
+clock.
+
+@example
+makestep 0.1 1
+burst 1/2
+@end example
 
 BE WARNED - certain software will be seriously affected by such jumps to
 the system time.  (That is the reason why chronyd uses slewing
 normally.)
-
-The @code{makestep} directive in the configuration file can be used
-to step the clock automatically when the adjustment is larger than a
-specified threshold, see @ref{makestep directive}.
 @c }}}
 @c {{{ manual
 @node manual command
@@ -3695,13 +3900,13 @@ directive}).
 The following examples illustrate the syntax
 
 @example
-maxdelay foo.bar.com 0.3
+maxdelay foo.example.net 0.3
 maxdelay 1.2.3.4 0.0015
 maxdelay 2001:db8::1 0.0015
 @end example
 
 The first example sets the maximum network delay allowed for a
-measurement to the host @code{foo.bar.com} to 0.3 seconds.  The second
+measurement to the host @code{foo.example.net} to 0.3 seconds.  The second
 and third examples set the maximum network delay for a measurement to
 the host with IPv4 address @code{1.2.3.4} and the host with IPv6 address
 @code{2001:db8::1} to 1.5 milliseconds.
@@ -3720,7 +3925,7 @@ directive}).
 The following examples illustrate the syntax
 
 @example
-maxdelaydevratio foo.bar.com 0.1
+maxdelaydevratio foo.example.net 0.1
 maxdelaydevratio 1.2.3.4 1.0
 maxdelaydevratio 2001:db8::1 100.0
 @end example
@@ -3736,13 +3941,13 @@ directive}).
 The following examples illustrate the syntax
 
 @example
-maxdelayratio foo.bar.com 1.5
+maxdelayratio foo.example.net 1.5
 maxdelayratio 1.2.3.4 2.0
 maxdelayratio 2001:db8::1 2.0
 @end example
 
 The first example sets the maximum network delay for a measurement to
-the host @code{foo.bar.com} to be 1.5 times the minimum delay found
+the host @code{foo.example.net} to be 1.5 times the minimum delay found
 amongst the previous measurements that have been retained.  The second
 and third examples set the maximum network delay for a measurement to
 the host with IPv4 address @code{1.2.3.4} and the host with IPv6
@@ -3773,10 +3978,10 @@ sampling).
 An example is 
 
 @example
-maxpoll foo.bar.com 10
+maxpoll foo.example.net 10
 @end example
 
-which sets the maximum polling interval for the host @code{foo.bar.com}
+which sets the maximum polling interval for the host @code{foo.example.net}
 to 1024 seconds.
 
 Note that the new maximum polling interval only takes effect after the
@@ -3810,10 +4015,10 @@ sampling).
 An example is 
 
 @example
-minpoll foo.bar.com 5
+minpoll foo.example.net 5
 @end example
 
-which sets the minimum polling interval for the host @code{foo.bar.com}
+which sets the minimum polling interval for the host @code{foo.example.net}
 to 32 seconds.
 
 Note that the new minimum polling interval only takes effect after the
@@ -3839,10 +4044,10 @@ IP address.
 An example is 
 
 @example
-minpoll foo.bar.com 5
+minpoll foo.example.net 5
 @end example
 
-which sets the minimum stratum for the host @code{foo.bar.com}
+which sets the minimum stratum for the host @code{foo.example.net}
 to 5.
 
 Note that the new minimum stratum only takes effect after the
@@ -3908,7 +4113,7 @@ illustrated below.
 offline
 offline 255.255.255.0/1.2.3.0
 offline 2001:db8:789a::/48
-offline foo.bar.com
+offline foo.example.net
 @end example
 
 The second form means that the @code{offline} command is to be applied
@@ -3957,9 +4162,7 @@ password
 @end example
 
 The computer will respond with a @samp{Password:} prompt, at which you
-should enter the password and press return.  (Note that the no-echo mode
-is limited to 8 characters on SunOS 4.1 due to limitations in the system
-library.  Other systems do not have this restriction.)
+should enter the password and press return.
 
 The password can be encoded as a string of characters not containing a space
 with optional @code{ASCII:} prefix or as a hexadecimal number with @code{HEX:}
@@ -3989,10 +4192,10 @@ IP address.
 An example is 
 
 @example
-polltarget foo.bar.com 12
+polltarget foo.example.net 12
 @end example
 
-which sets the poll target for the host @code{foo.bar.com}
+which sets the poll target for the host @code{foo.example.net}
 to 12.
 @c }}}
 @c {{{ quit
@@ -4135,8 +4338,8 @@ columns.
 MS Name/IP address         Stratum Poll Reach LastRx Last sample
 ===============================================================================
 #* GPS0                          0   4   377    11   -479ns[ -621ns] +/-  134ns
-^? a.b.c                         2   6   377    23   -923us[ -924us] +/-   43ms
-^+ d.e.f                         1   6   377    21  -2629us[-2619us] +/-   86ms
+^? foo.example.net               2   6   377    23   -923us[ -924us] +/-   43ms
+^+ bar.example.net               1   6   377    21  -2629us[-2619us] +/-   86ms
 @end group
 @end example
 
@@ -4292,7 +4495,7 @@ The @code{tracking} command displays parameters about the system's clock
 performance.  An example of the output is shown below.
 
 @example
-Reference ID    : 1.2.3.4 (a.b.c)
+Reference ID    : 1.2.3.4 (foo.example.net)
 Stratum         : 3
 Ref time (UTC)  : Fri Feb  3 15:00:29 2012
 System time     : 0.000001501 seconds slow of NTP time
@@ -4323,7 +4526,7 @@ in the @file{@SYSCONFDIR@/chrony.conf} file (@pxref{local directive})).
 The stratum indicates how many hops away from a computer with an
 attached reference clock we are.  Such a computer is a stratum-1
 computer, so the computer in the example is two hops away
-(i.e. @code{a.b.c} is a stratum-2 and is synchronised from a stratum-1).
+(i.e. @code{foo.example.net} is a stratum-2 and is synchronised from a stratum-1).
 
 @item Ref time
 This is the time (UTC) at which the last measurement from the reference
@@ -4343,7 +4546,7 @@ true time (which it reports to NTP clients when it is operating in
 server mode).  The value reported on this line is the difference due to
 this effect.
 
-On systems such as Solaris and SunOS, @code{chronyd} has no means to
+On systems other than Linux, @code{chronyd} doesn't
 adjust the fundamental rate of the system clock, so keeps the system
 time correct by periodically making offsets to it as though an error had
 been measured.  The build up of these offsets will be observed in this
@@ -4386,11 +4589,6 @@ This is the estimated error bound on the the frequency.
 @item Root delay
 This is the total of the network path delays to the stratum-1 computer
 from which the computer is ultimately synchronised.
-
-In certain extreme situations, this value can be negative.  (This can
-arise in a symmetric peer arrangement where the computers' frequencies
-are not tracking each other and the network delay is very short relative
-to the turn-around time at each computer.)
 
 @item Root dispersion
 This is the total dispersion accumulated through all the computers back
@@ -4521,9 +4719,9 @@ For the current development from the developers' version control system see the
 @code{Git} link on the web site.
 
 @subsection Are there any packaged versions of chrony?
-We are aware of packages for Arch, Debian, Fedora, Gentoo, Mandriva, Slackware,
-Ubuntu, FreeBSD and NetBSD.  We are not involved with how these are built or
-distributed.
+We are aware of packages for Arch, CentOS, Debian, Fedora, Gentoo, Mageia,
+OpenSuse, Slackware, Ubuntu, FreeBSD and NetBSD.  We are not involved with how
+these are built or distributed.
 
 @subsection Where is the home page?
 It is currently at
@@ -4608,13 +4806,16 @@ increasing intervals until it succeeds.  The @code{online} command can be
 issued from @code{chronyc} to try to resolve them immediately.
 
 @subsection How can I make chronyd more secure?
-If you don't need to serve time to NTP clients, you can add @code{port 0} to
-the @file{chrony.conf} file to disable the NTP server/peer sockets and prevent
-NTP requests from reaching @code{chronyd}.
+If you don't need to serve time to NTP clients or peers, you can add
+@code{port 0} to the @file{chrony.conf} file to completely disable the NTP
+server functionality and prevent NTP requests from reaching @code{chronyd}.
+Starting from version 2.0, the NTP server port is open only when client access
+is allowed by the @code{allow} directive or command, an NTP peer is configured,
+or the @code{broadcast} directive is used.
 
 If you don't need to use @code{chronyc} remotely, you can add the following
 directives to the configuration file to bind the command sockets to the
-loopback interface
+loopback interface.  This is done by default since version 2.0.
 
 @example
 bindcmdaddress 127.0.0.1
@@ -4642,16 +4843,27 @@ they are @code{minpoll}, @code{maxpoll}, @code{polltarget}, @code{maxdelay},
 
 The first three options set the minimum and maximum allowed polling interval,
 and how should be the actual interval adjusted in the specified range.  Their
-default values are suitable for public NTP servers, which normally don't allow
-too frequent polling, but if you run your own NTP servers or have permission to
-poll the servers frequently, setting the options for shorter polling intervals
-may significantly improve the accuracy of the system clock.
+default values are 6 (64 seconds) for @code{minpoll}, 10 (1024 seconds) for
+@code{maxpoll} and 6 (samples) for @code{polltarget}.  The default values
+should be used for general servers on the internet.  With your own NTP servers
+or if have permission to poll some servers more frequently, setting these
+options for shorter polling intervals may significantly improve the accuracy of
+the system clock.
 
-The optimal polling interval depends on many factors, this includes the ratio
+The optimal polling interval depends on many factors, including the ratio
 between the wander of the clock and the network jitter (sometimes expressed in
 NTP documents as the Allan intercept), the temperature sensitivity of the
-crystal oscillator and the maximum rate of change of the temperature.  An
-example of the directive for a server located in the same LAN could be
+crystal oscillator and the maximum rate of change of the temperature.
+
+An example of the directive for an NTP server on the internet that you are
+allowed to poll frequently could be
+
+@example
+server foo.example.net minpoll 4 maxpoll 6 polltarget 16
+@end example
+
+An example using very short polling intervals for a server located in the
+same LAN could be
 
 @example
 server ntp.local minpoll 2 maxpoll 4 polltarget 30
@@ -4660,7 +4872,7 @@ server ntp.local minpoll 2 maxpoll 4 polltarget 30
 The maxdelay options are useful to ignore measurements with larger delay (e.g.
 due to congestion in the network) and improve the stability of the
 synchronisation.  The @code{maxdelaydevratio} option could be added to the
-previous example
+example with local NTP server
 
 @example
 server ntp.local minpoll 2 maxpoll 4 polltarget 30 maxdelaydevratio 2
@@ -4698,9 +4910,10 @@ will arise.  You should always make X quite high (e.g. 10) in this directive.
 @section Issues with chronyc
 
 @subsection I keep getting the error @code{506 Cannot talk to daemon}
-Make sure that the @file{chrony.conf} file (on the computer where
-@code{chronyd} is running) has a @code{cmdallow} entry for the computer you are
-running @code{chronyc} on. This isn't necessary for localhost.
+When accessing @code{chronyd} remotely, make sure that the @file{chrony.conf}
+file (on the computer where @code{chronyd} is running) has a @code{cmdallow}
+entry for the computer you are running @code{chronyc} on and an appropriate
+@code{bindcmdaddress} directive.  This isn't necessary for localhost.
 
 Perhaps @code{chronyd} is not running.  Try using the ps command (e.g. on
 Linux, 'ps -auxw') to see if it's running.  Or try 'netstat -a' and see if the

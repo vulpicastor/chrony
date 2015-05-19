@@ -159,12 +159,16 @@ extern void LCL_AccumulateOffset(double offset, double corr_rate);
    the system clock is fast on true time, i.e. it needs to be stepped
    backwards. (Same convention as for AccumulateOffset routine). */
 
-extern void LCL_ApplyStepOffset(double offset);
+extern int LCL_ApplyStepOffset(double offset);
 
 /* Routine to invoke notify handlers on an unexpected time jump
    in system clock */
 extern void LCL_NotifyExternalTimeStep(struct timeval *raw, struct timeval *cooked,
     double offset, double dispersion);
+
+/* Routine to invoke notify handlers on leap second when the system clock
+   doesn't correct itself */
+extern void LCL_NotifyLeap(int leap);
 
 /* Perform the combination of modifying the frequency and applying
    a slew, in one easy step */
@@ -194,10 +198,14 @@ extern void LCL_Finalise(void);
    to a timezone problem. */
 extern int LCL_MakeStep(void);
 
-/* Routine to schedule a leap second. Leap second will be inserted
-   at the end of the day if argument is positive, deleted if negative,
-   and zero cancels scheduled leap second. */
-extern void LCL_SetLeap(int leap);
+/* Check if the system driver supports leap seconds, i.e. LCL_SetSystemLeap
+   does something */
+extern int LCL_CanSystemLeap(void);
+
+/* Routine to set the system clock to correct itself for a leap second if
+   supported.  Leap second will be inserted at the end of the day if the
+   argument is positive, deleted if negative, and zero resets the setting. */
+extern void LCL_SetSystemLeap(int leap);
 
 /* Routine to set a frequency correction (in ppm) that should be applied
    to local clock to compensate for temperature changes.  A positive
@@ -205,5 +213,9 @@ extern void LCL_SetLeap(int leap);
    actual compensation (may be different from the requested compensation
    due to clamping or rounding). */
 extern double LCL_SetTempComp(double comp);
+
+/* Routine to update the synchronisation status in the kernel to allow other
+   applications to know if the system clock is synchronised and error bounds */
+extern void LCL_SetSyncStatus(int synchronised, double est_error, double max_error);
 
 #endif /* GOT_LOCAL_H */

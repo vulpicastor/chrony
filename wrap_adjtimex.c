@@ -22,17 +22,32 @@
 
   =======================================================================
 
-  This is a wrapper around the Linux adjtimex system call.  It isolates the
-  inclusion of <linux/adjtimex.h> from the need to include other header files,
-  many of which conflict with those in <linux/...> on some recent distributions
-  (as of Jul 2000) using kernels around 2.2.16 onwards.
+  This is a wrapper around the Linux adjtimex system call.
 
   */
 
 #include "config.h"
 
-#include "chrony_timex.h"
 #include "wrap_adjtimex.h"
+
+#include <sys/timex.h>
+
+/* Definitions used if missing in the system headers */
+#ifndef ADJ_TAI
+#define ADJ_TAI                 0x0080  /* set TAI offset */
+#endif
+#ifndef ADJ_SETOFFSET
+#define ADJ_SETOFFSET           0x0100  /* add 'time' to current time */
+#endif
+#ifndef ADJ_NANO
+#define ADJ_NANO                0x2000  /* select nanosecond resolution */
+#endif
+#ifndef ADJ_OFFSET_SS_READ
+#define ADJ_OFFSET_SS_READ      0xa001  /* read-only adjtime */
+#endif
+
+/* Frequency offset scale (shift) */
+#define SHIFT_USEC 16
 
 static int status = 0;
 
@@ -56,7 +71,7 @@ TMX_ResetOffset(void)
 
   /* Set status back */
   txc.modes = ADJ_STATUS;
-  txc.modes = status;
+  txc.status = status;
   if (adjtimex(&txc) < 0)
     return -1;
 
@@ -68,19 +83,11 @@ TMX_SetFrequency(double *freq, long tick)
 {
   struct timex txc;
   
-  txc.modes = ADJ_TICK | ADJ_FREQUENCY | ADJ_STATUS;
+  txc.modes = ADJ_TICK | ADJ_FREQUENCY;
 
   txc.freq = (long)(*freq * (double)(1 << SHIFT_USEC));
   *freq = txc.freq / (double)(1 << SHIFT_USEC);
   txc.tick = tick;
-  txc.status = status; 
-
-  if (!(status & STA_UNSYNC)) {
-    /* maxerror has to be reset periodically to prevent kernel
-       from enabling UNSYNC flag */
-    txc.modes |= ADJ_MAXERROR;
-    txc.maxerror = 0;
-  }
 
   return adjtimex(&txc);
 }
@@ -94,51 +101,6 @@ TMX_GetFrequency(double *freq, long *tick)
   result = adjtimex(&txc);
   *freq = txc.freq / (double)(1 << SHIFT_USEC);
   *tick = txc.tick;
-  return result;
-}
-
-int
-TMX_ReadCurrentParams(struct tmx_params *params)
-{
-  struct timex txc;
-  int result;
-  
-  txc.modes = 0; /* pure read */
-  result = adjtimex(&txc);
-
-  params->tick     = txc.tick;
-  params->offset   = txc.offset;
-  params->freq     = txc.freq;
-  params->dfreq    = txc.freq / (double)(1 << SHIFT_USEC);
-  params->maxerror = txc.maxerror;
-  params->esterror = txc.esterror;
-  
-  params->sta_pll       = !!(txc.status & STA_PLL);
-  params->sta_ppsfreq   = !!(txc.status & STA_PPSFREQ);
-  params->sta_ppstime   = !!(txc.status & STA_PPSTIME);
-  params->sta_fll       = !!(txc.status & STA_FLL);
-  params->sta_ins       = !!(txc.status & STA_INS);
-  params->sta_del       = !!(txc.status & STA_DEL);
-  params->sta_unsync    = !!(txc.status & STA_UNSYNC);
-  params->sta_freqhold  = !!(txc.status & STA_FREQHOLD);
-  params->sta_ppssignal = !!(txc.status & STA_PPSSIGNAL);
-  params->sta_ppsjitter = !!(txc.status & STA_PPSJITTER);
-  params->sta_ppswander = !!(txc.status & STA_PPSWANDER);
-  params->sta_ppserror  = !!(txc.status & STA_PPSERROR);
-  params->sta_clockerr  = !!(txc.status & STA_CLOCKERR);
-
-  params->constant  = txc.constant;
-  params->precision = txc.precision;
-  params->tolerance = txc.tolerance;
-  params->ppsfreq   = txc.ppsfreq;
-  params->jitter    = txc.jitter;
-  params->shift     = txc.shift;
-  params->stabil    = txc.stabil;
-  params->jitcnt    = txc.jitcnt;
-  params->calcnt    = txc.calcnt;
-  params->errcnt    = txc.errcnt;
-  params->stbcnt    = txc.stbcnt;
-
   return result;
 }
 
@@ -161,7 +123,29 @@ TMX_SetLeap(int leap)
   return adjtimex(&txc);
 }
 
-int TMX_SetSync(int sync)
+int
+TMX_GetLeap(int *leap)
+{
+  struct timex txc;
+
+  txc.modes = 0;
+  if (adjtimex(&txc) < 0)
+    return -1;
+
+  status &= ~(STA_INS | STA_DEL);
+  status |= txc.status & (STA_INS | STA_DEL);
+
+  if (status & STA_INS)
+    *leap = 1;
+  else if (status & STA_DEL)
+    *leap = -1;
+  else
+    *leap = 0;
+
+  return 0;
+}
+
+int TMX_SetSync(int sync, double est_error, double max_error)
 {
   struct timex txc;
 
@@ -171,8 +155,10 @@ int TMX_SetSync(int sync)
     status |= STA_UNSYNC;
   }
 
-  txc.modes = ADJ_STATUS;
+  txc.modes = ADJ_STATUS | ADJ_ESTERROR | ADJ_MAXERROR;
   txc.status = status;
+  txc.esterror = est_error * 1.0e6;
+  txc.maxerror = max_error * 1.0e6;
 
   return adjtimex(&txc);
 }

@@ -219,7 +219,7 @@ accrue_offset(double offset, double corr_rate)
 /* Positive offset means system clock is fast of true time, therefore
    step backwards */
 
-static void
+static int
 apply_step_offset(double offset)
 {
   struct timeval old_time, new_time, rounded_new_time, T1;
@@ -248,7 +248,8 @@ apply_step_offset(double offset)
   UTI_DiffTimevalsToDouble(&rounding_error, &rounded_new_time, &new_time);
 
   if (settimeofday(&new_time, NULL) < 0) {
-    LOG_FATAL(LOGF_SysSolaris, "settimeofday() failed");
+    DEBUG_LOG(LOGF_SysSolaris, "settimeofday() failed");
+    return 0;
   }
 
   UTI_AddDoubleToTimeval(&T0, offset, &T1);
@@ -257,6 +258,8 @@ apply_step_offset(double offset)
   offset_register += rounding_error;
 
   start_adjust();
+
+  return 1;
 }
 
 /* ================================================== */
@@ -426,7 +429,8 @@ SYS_Solaris_Initialise(void)
   lcl_RegisterSystemDrivers(read_frequency, set_frequency, 
                             accrue_offset, apply_step_offset,
                             get_offset_correction,
-                            NULL /* set_leap */);
+                            NULL /* set_leap */,
+                            NULL /* set_sync_status */);
 
   /* Turn off the kernel switch that keeps the system clock in step
      with the non-volatile clock */

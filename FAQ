@@ -11,9 +11,9 @@ see the 'Git' link on the web site.
 1.2 Are there any packaged versions of chrony?
 ----------------------------------------------
 
-We are aware of packages for Arch, Debian, Fedora, Gentoo, Mandriva,
-Slackware, Ubuntu, FreeBSD and NetBSD. We are not involved with how
-these are built or distributed.
+We are aware of packages for Arch, CentOS, Debian, Fedora, Gentoo,
+Mageia, OpenSuse, Slackware, Ubuntu, FreeBSD and NetBSD. We are not
+involved with how these are built or distributed.
 
 1.3 Where is the home page?
 ---------------------------
@@ -107,13 +107,17 @@ issued from 'chronyc' to try to resolve them immediately.
 3.3 How can I make chronyd more secure?
 ---------------------------------------
 
-If you don't need to serve time to NTP clients, you can add 'port 0' to
-the 'chrony.conf' file to disable the NTP server/peer sockets and
-prevent NTP requests from reaching 'chronyd'.
+If you don't need to serve time to NTP clients or peers, you can add
+'port 0' to the 'chrony.conf' file to completely disable the NTP server
+functionality and prevent NTP requests from reaching 'chronyd'.
+Starting from version 2.0, the NTP server port is open only when client
+access is allowed by the 'allow' directive or command, an NTP peer is
+configured, or the 'broadcast' directive is used.
 
    If you don't need to use 'chronyc' remotely, you can add the
 following directives to the configuration file to bind the command
-sockets to the loopback interface
+sockets to the loopback interface.  This is done by default since
+version 2.0.
 
      bindcmdaddress 127.0.0.1
      bindcmdaddress ::1
@@ -141,25 +145,33 @@ directive, they are 'minpoll', 'maxpoll', 'polltarget', 'maxdelay',
 
    The first three options set the minimum and maximum allowed polling
 interval, and how should be the actual interval adjusted in the
-specified range.  Their default values are suitable for public NTP
-servers, which normally don't allow too frequent polling, but if you run
-your own NTP servers or have permission to poll the servers frequently,
-setting the options for shorter polling intervals may significantly
-improve the accuracy of the system clock.
+specified range.  Their default values are 6 (64 seconds) for 'minpoll',
+10 (1024 seconds) for 'maxpoll' and 6 (samples) for 'polltarget'.  The
+default values should be used for general servers on the internet.  With
+your own NTP servers or if have permission to poll some servers more
+frequently, setting these options for shorter polling intervals may
+significantly improve the accuracy of the system clock.
 
-   The optimal polling interval depends on many factors, this includes
-the ratio between the wander of the clock and the network jitter
-(sometimes expressed in NTP documents as the Allan intercept), the
-temperature sensitivity of the crystal oscillator and the maximum rate
-of change of the temperature.  An example of the directive for a server
-located in the same LAN could be
+   The optimal polling interval depends on many factors, including the
+ratio between the wander of the clock and the network jitter (sometimes
+expressed in NTP documents as the Allan intercept), the temperature
+sensitivity of the crystal oscillator and the maximum rate of change of
+the temperature.
+
+   An example of the directive for an NTP server on the internet that
+you are allowed to poll frequently could be
+
+     server foo.example.net minpoll 4 maxpoll 6 polltarget 16
+
+   An example using very short polling intervals for a server located in
+the same LAN could be
 
      server ntp.local minpoll 2 maxpoll 4 polltarget 30
 
    The maxdelay options are useful to ignore measurements with larger
 delay (e.g.  due to congestion in the network) and improve the stability
 of the synchronisation.  The 'maxdelaydevratio' option could be added to
-the previous example
+the example with local NTP server
 
      server ntp.local minpoll 2 maxpoll 4 polltarget 30 maxdelaydevratio 2
 
@@ -202,9 +214,10 @@ this directive.
 5.1 I keep getting the error '506 Cannot talk to daemon'
 --------------------------------------------------------
 
-Make sure that the 'chrony.conf' file (on the computer where 'chronyd'
-is running) has a 'cmdallow' entry for the computer you are running
-'chronyc' on.  This isn't necessary for localhost.
+When accessing 'chronyd' remotely, make sure that the 'chrony.conf' file
+(on the computer where 'chronyd' is running) has a 'cmdallow' entry for
+the computer you are running 'chronyc' on and an appropriate
+'bindcmdaddress' directive.  This isn't necessary for localhost.
 
    Perhaps 'chronyd' is not running.  Try using the ps command (e.g.  on
 Linux, 'ps -auxw') to see if it's running.  Or try 'netstat -a' and see

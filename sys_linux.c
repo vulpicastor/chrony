@@ -44,7 +44,7 @@ int SchedPriority = 0;
 int LockAll = 0;
 #endif
 
-#ifdef FEAT_LINUXCAPS
+#ifdef FEAT_PRIVDROP
 #include <sys/types.h>
 #include <pwd.h>
 #include <sys/prctl.h>
@@ -57,6 +57,9 @@ int LockAll = 0;
 #include "conf.h"
 #include "logging.h"
 #include "wrap_adjtimex.h"
+
+/* The threshold for adjtimex maxerror when the kernel sets the UNSYNC flag */
+#define UNSYNC_MAXERROR 16.0
 
 /* This is the uncompensated system tick value */
 static int nominal_tick;
@@ -82,25 +85,30 @@ static int tick_update_hz;
 /* ================================================== */
 
 inline static long
-our_round(double x) {
+our_round(double x)
+{
   long y;
 
   if (x > 0.0)
-	  y = x + 0.5;
+    y = x + 0.5;
   else
-	  y = x - 0.5;
+    y = x - 0.5;
+
   return y;
 }
 
 /* ================================================== */
 /* Positive means currently fast of true time, i.e. jump backwards */
 
-static void
+static int
 apply_step_offset(double offset)
 {
   if (TMX_ApplyStepOffset(-offset) < 0) {
-    LOG_FATAL(LOGF_SysLinux, "adjtimex() failed");
+    DEBUG_LOG(LOGF_SysLinux, "adjtimex() failed");
+    return 0;
   }
+
+  return 1;
 }
 
 /* ================================================== */
@@ -169,6 +177,15 @@ read_frequency(void)
 static void
 set_leap(int leap)
 {
+  int current_leap;
+
+  if (TMX_GetLeap(&current_leap) < 0) {
+    LOG_FATAL(LOGF_SysLinux, "adjtimex() failed in set_leap");
+  }
+
+  if (current_leap == leap)
+    return;
+
   if (TMX_SetLeap(leap) < 0) {
     LOG_FATAL(LOGF_SysLinux, "adjtimex() failed in set_leap");
   }
@@ -179,21 +196,42 @@ set_leap(int leap)
 
 /* ================================================== */
 
+static void
+set_sync_status(int synchronised, double est_error, double max_error)
+{
+  if (synchronised) {
+    if (est_error > UNSYNC_MAXERROR)
+      est_error = UNSYNC_MAXERROR;
+    if (max_error >= UNSYNC_MAXERROR) {
+      max_error = UNSYNC_MAXERROR;
+      synchronised = 0;
+    }
+  } else {
+    est_error = max_error = UNSYNC_MAXERROR;
+  }
+
+  /* Clear the UNSYNC flag only if rtcsync is enabled */
+  if (!CNF_GetRtcSync())
+    synchronised = 0;
+
+  TMX_SetSync(synchronised, est_error, max_error);
+}
+
+/* ================================================== */
+
 /* Estimate the value of USER_HZ given the value of txc.tick that chronyd finds when
  * it starts.  The only credible values are 100 (Linux/x86) or powers of 2.
  * Also, the bounds checking inside the kernel's adjtimex system call enforces
  * a +/- 10% movement of tick away from the nominal value 1e6/USER_HZ. */
 
-static void
-guess_hz_and_shift_hz(int tick, int *hz, int *shift_hz)
+static int
+guess_hz(int tick)
 {
   int i, tick_lo, tick_hi, ihz;
   double tick_nominal;
   /* Pick off the hz=100 case first */
   if (tick >= 9000 && tick <= 11000) {
-    *hz = 100;
-    *shift_hz = 7;
-    return;
+    return 100;
   }
 
   for (i=4; i<16; i++) { /* surely 16 .. 32768 is a wide enough range? */
@@ -203,36 +241,26 @@ guess_hz_and_shift_hz(int tick, int *hz, int *shift_hz)
     tick_hi = (int)(0.5 + tick_nominal*4.0/3.0);
     
     if (tick_lo < tick && tick <= tick_hi) {
-      *hz = ihz;
-      *shift_hz = i;
-      return;
+      return ihz;
     }
   }
 
   /* oh dear.  doomed. */
-  *hz = 0;
-  *shift_hz = 0;
+  return 0;
 }
 
 /* ================================================== */
 
 static int
-get_hz_and_shift_hz(int *hz, int *shift_hz)
+get_hz(void)
 {
 #ifdef _SC_CLK_TCK
-  if ((*hz = sysconf(_SC_CLK_TCK)) < 1) {
+  int hz;
+
+  if ((hz = sysconf(_SC_CLK_TCK)) < 1)
     return 0;
-  }
 
-  if (*hz == 100) {
-    *shift_hz = 7;
-    return 1;
-  }
-
-  for (*shift_hz = 1; (*hz >> *shift_hz) > 1; (*shift_hz)++)
-    ;
-
-  return 1;
+  return hz;
 #else
   return 0;
 #endif
@@ -259,19 +287,20 @@ static void
 get_version_specific_details(void)
 {
   int major, minor, patch;
-  int shift_hz;
-  struct tmx_params tmx_params;
+  long tick;
+  double freq;
   struct utsname uts;
   
-  if (!get_hz_and_shift_hz(&hz, &shift_hz)) {
-    TMX_ReadCurrentParams(&tmx_params);
+  hz = get_hz();
 
-    guess_hz_and_shift_hz(tmx_params.tick, &hz, &shift_hz);
+  if (!hz) {
+    if (TMX_GetFrequency(&freq, &tick) < 0)
+      LOG_FATAL(LOGF_SysLinux, "adjtimex() failed");
 
-    if (!shift_hz) {
-      LOG_FATAL(LOGF_SysLinux, "Can't determine hz (txc.tick=%ld txc.freq=%ld (%.8f) txc.offset=%ld)",
-          tmx_params.tick, tmx_params.freq, tmx_params.dfreq, tmx_params.offset);
-    }
+    hz = guess_hz(tick);
+
+    if (!hz)
+      LOG_FATAL(LOGF_SysLinux, "Can't determine hz from tick %ld", tick);
   }
 
   dhz = (double) hz;
@@ -332,13 +361,11 @@ SYS_Linux_Initialise(void)
     have_setoffset = 0;
   }
 
-  TMX_SetSync(CNF_GetRtcSync());
-
   SYS_Generic_CompleteFreqDriver(1.0e6 * max_tick_bias / nominal_tick,
                                  1.0 / tick_update_hz,
                                  read_frequency, set_frequency,
                                  have_setoffset ? apply_step_offset : NULL,
-                                 set_leap);
+                                 set_leap, set_sync_status);
 }
 
 /* ================================================== */
@@ -352,7 +379,7 @@ SYS_Linux_Finalise(void)
 
 /* ================================================== */
 
-#ifdef FEAT_LINUXCAPS
+#ifdef FEAT_PRIVDROP
 void
 SYS_Linux_DropRoot(char *user)
 {
@@ -382,7 +409,7 @@ SYS_Linux_DropRoot(char *user)
     LOG_FATAL(LOGF_SysLinux, "setuid(%d) failed", pw->pw_uid);
   }
 
-  if ((cap = cap_from_text("cap_sys_time=ep")) == NULL) {
+  if ((cap = cap_from_text("cap_net_bind_service,cap_sys_time=ep")) == NULL) {
     LOG_FATAL(LOGF_SysLinux, "cap_from_text() failed");
   }
 

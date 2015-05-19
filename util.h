@@ -86,6 +86,9 @@ extern void UTI_IPHostToNetwork(IPAddr *src, IPAddr *dest);
 extern void UTI_IPNetworkToHost(IPAddr *src, IPAddr *dest);
 extern int UTI_CompareIPs(IPAddr *a, IPAddr *b, IPAddr *mask);
 
+extern void UTI_SockaddrToIPAndPort(struct sockaddr *sa, IPAddr *ip, unsigned short *port);
+extern int UTI_IPAndPortToSockaddr(IPAddr *ip, unsigned short port, struct sockaddr *sa);
+
 extern char *UTI_TimeToLogForm(time_t t);
 
 /* Adjust time following a frequency/offset change */
@@ -100,6 +103,9 @@ extern NTP_int32 UTI_DoubleToInt32(double x);
 extern void UTI_TimevalToInt64(struct timeval *src, NTP_int64 *dest, uint32_t fuzz);
 
 extern void UTI_Int64ToTimeval(NTP_int64 *src, struct timeval *dest);
+
+/* Check if time + offset is sane */
+extern int UTI_IsTimeOffsetSane(struct timeval *tv, double offset);
 
 extern void UTI_TimevalNetworkToHost(Timeval *src, struct timeval *dest);
 extern void UTI_TimevalHostToNetwork(struct timeval *src, Timeval *dest);

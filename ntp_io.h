@@ -39,21 +39,21 @@ extern void NIO_Initialise(int family);
 extern void NIO_Finalise(void);
 
 /* Function to obtain a socket for sending client packets */
-extern int NIO_GetClientSocket(NTP_Remote_Address *remote_addr);
+extern int NIO_OpenClientSocket(NTP_Remote_Address *remote_addr);
 
 /* Function to obtain a socket for sending server/peer packets */
-extern int NIO_GetServerSocket(NTP_Remote_Address *remote_addr);
+extern int NIO_OpenServerSocket(NTP_Remote_Address *remote_addr);
 
-/* Function to close a socket returned by NIO_GetClientSocket() */
+/* Function to close a socket returned by NIO_OpenClientSocket() */
 extern void NIO_CloseClientSocket(int sock_fd);
+
+/* Function to close a socket returned by NIO_OpenServerSocket() */
+extern void NIO_CloseServerSocket(int sock_fd);
 
 /* Function to check if socket is a server socket */
 extern int NIO_IsServerSocket(int sock_fd);
 
 /* Function to transmit a packet */
-extern int NIO_SendNormalPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr);
-
-/* Function to transmit an authenticated packet */
-extern int NIO_SendAuthenticatedPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr, int auth_len);
+extern int NIO_SendPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr, NTP_Local_Address *local_addr, int length);
 
 #endif /* GOT_NTP_IO_H */

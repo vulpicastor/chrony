@@ -43,10 +43,6 @@
    to store per source */
 #define MAX_SAMPLES 64
 
-/* User defined maximum and minimum number of samples */
-int max_samples;
-int min_samples;
-
 /* This is the assumed worst case bound on an unknown frequency,
    2000ppm, which would be pretty bad */
 #define WORST_CASE_FREQ_BOUND (2000.0/1.0e6)
@@ -67,6 +63,10 @@ struct SST_Stats_Record {
   /* Reference ID and IP address of source, used for logging to statistics log */
   uint32_t refid;
   IPAddr *ip_addr;
+
+  /* User defined minimum and maximum number of samples */
+  int min_samples;
+  int max_samples;
 
   /* Number of samples currently stored.  The samples are stored in circular
      buffer. */
@@ -108,9 +108,6 @@ struct SST_Stats_Record {
      about estimated_frequency */
   double skew;
 
-  /* This is the direction the skew went in at the last sample */
-  SST_Skew_Direction skew_dirn;
-
   /* This is the estimated residual variance of the data points */
   double variance;
 
@@ -122,8 +119,7 @@ struct SST_Stats_Record {
      sample times.  In this module, we use the convention that
      positive means the local clock is FAST of the source and negative
      means it is SLOW.  This is contrary to the convention in the NTP
-     stuff; that part of the code is written to correspond with
-     RFC1305 conventions. */
+     stuff. */
   double offsets[MAX_SAMPLES * REGRESS_RUNS_RATIO];
 
   /* This is an array of the offsets as originally measured.  Local
@@ -167,8 +163,6 @@ SST_Initialise(void)
   logfileid = CNF_GetLogStatistics() ? LOG_FileOpen("statistics",
       "   Date (UTC) Time     IP Address    Std dev'n Est offset  Offset sd  Diff freq   Est skew  Stress  Ns  Bs  Nr")
     : -1;
-  max_samples = CNF_GetMaxSamples();
-  min_samples = CNF_GetMinSamples();
 }
 
 /* ================================================== */
@@ -182,13 +176,15 @@ SST_Finalise(void)
 /* This function creates a new instance of the statistics handler */
 
 SST_Stats
-SST_CreateInstance(uint32_t refid, IPAddr *addr)
+SST_CreateInstance(uint32_t refid, IPAddr *addr, int min_samples, int max_samples)
 {
   SST_Stats inst;
   inst = MallocNew(struct SST_Stats_Record);
-  inst->refid = refid;
-  inst->ip_addr = addr;
 
+  inst->min_samples = min_samples;
+  inst->max_samples = max_samples;
+
+  SST_SetRefid(inst, refid, addr);
   SST_ResetInstance(inst);
 
   return inst;
@@ -216,13 +212,21 @@ SST_ResetInstance(SST_Stats inst)
   inst->min_delay_sample = 0;
   inst->estimated_frequency = 0;
   inst->skew = 2000.0e-6;
-  inst->skew_dirn = SST_Skew_Nochange;
   inst->estimated_offset = 0.0;
   inst->estimated_offset_sd = 86400.0; /* Assume it's at least within a day! */
   inst->offset_time.tv_sec = 0;
   inst->offset_time.tv_usec = 0;
   inst->variance = 16.0;
   inst->nruns = 0;
+}
+
+/* ================================================== */
+
+void
+SST_SetRefid(SST_Stats inst, uint32_t refid, IPAddr *addr)
+{
+  inst->refid = refid;
+  inst->ip_addr = addr;
 }
 
 /* ================================================== */
@@ -259,7 +263,7 @@ SST_AccumulateSample(SST_Stats inst, struct timeval *sample_time,
 
   /* Make room for the new sample */
   if (inst->n_samples > 0 &&
-      (inst->n_samples == MAX_SAMPLES || inst->n_samples == max_samples)) {
+      (inst->n_samples == MAX_SAMPLES || inst->n_samples == inst->max_samples)) {
     prune_register(inst, 1);
   }
 
@@ -444,7 +448,7 @@ SST_DoNewRegression(SST_Stats inst)
   inst->regression_ok = RGR_FindBestRegression(times_back + inst->runs_samples,
                                          offsets + inst->runs_samples, weights,
                                          inst->n_samples, inst->runs_samples,
-                                         min_samples,
+                                         inst->min_samples,
                                          &est_intercept, &est_slope, &est_var,
                                          &est_intercept_sd, &est_slope_sd,
                                          &best_start, &nruns, &degrees_of_freedom);
@@ -466,18 +470,6 @@ SST_DoNewRegression(SST_Stats inst)
       inst->skew = MIN_SKEW;
 
     stress = fabs(old_freq - inst->estimated_frequency) / old_skew;
-
-    if (best_start > 0) {
-      /* If we are throwing old data away, retain the current
-         assumptions about the skew */
-      inst->skew_dirn = SST_Skew_Nochange;
-    } else {
-      if (inst->skew < old_skew) {
-        inst->skew_dirn = SST_Skew_Decrease;
-      } else {
-        inst->skew_dirn = SST_Skew_Increase;
-      }
-    }
 
     if (logfileid != -1) {
       LOG_FileWrite(logfileid, "%s %-15s %10.3e %10.3e %10.3e %10.3e %10.3e %7.1e %3d %3d %3d",
@@ -537,11 +529,19 @@ SST_GetSelectionData(SST_Stats inst, struct timeval *now,
                      double *offset_lo_limit,
                      double *offset_hi_limit,
                      double *root_distance,
-                     double *variance, int *select_ok)
+                     double *variance,
+                     double *first_sample_ago,
+                     double *last_sample_ago,
+                     int *select_ok)
 {
   double offset, sample_elapsed;
   int i, j;
   
+  if (!inst->n_samples) {
+    *select_ok = 0;
+    return;
+  }
+
   i = get_runsbuf_index(inst, inst->best_single_sample);
   j = get_buf_index(inst, inst->best_single_sample);
 
@@ -570,10 +570,16 @@ SST_GetSelectionData(SST_Stats inst, struct timeval *now,
   }
 #endif
 
+  i = get_runsbuf_index(inst, 0);
+  UTI_DiffTimevalsToDouble(first_sample_ago, now, &inst->sample_times[i]);
+  i = get_runsbuf_index(inst, inst->n_samples - 1);
+  UTI_DiffTimevalsToDouble(last_sample_ago, now, &inst->sample_times[i]);
+
   *select_ok = inst->regression_ok;
 
-  DEBUG_LOG(LOGF_SourceStats, "n=%d off=%f dist=%f var=%f selok=%d",
-      inst->n_samples, offset, *root_distance, *variance, *select_ok);
+  DEBUG_LOG(LOGF_SourceStats, "n=%d off=%f dist=%f var=%f first_ago=%f last_ago=%f selok=%d",
+            inst->n_samples, offset, *root_distance, *variance,
+            *first_sample_ago, *last_sample_ago, *select_ok);
 }
 
 /* ================================================== */
@@ -625,27 +631,23 @@ SST_SlewSamples(SST_Stats inst, struct timeval *when, double dfreq, double doffs
     sample = &(inst->sample_times[i]);
     prev = *sample;
     UTI_AdjustTimeval(sample, when, sample, &delta_time, dfreq, doffset);
-    prev_offset = inst->offsets[i];
     inst->offsets[i] += delta_time;
-
-    DEBUG_LOG(LOGF_SourceStats, "i=%d old_st=[%s] new_st=[%s] old_off=%f new_off=%f",
-        i, UTI_TimevalToString(&prev), UTI_TimevalToString(sample),
-        prev_offset, inst->offsets[i]);
   }
 
-  /* Do a half-baked update to the regression estimates */
+  /* Update the regression estimates */
   prev = inst->offset_time;
   prev_offset = inst->estimated_offset;
   prev_freq = inst->estimated_frequency;
   UTI_AdjustTimeval(&(inst->offset_time), when, &(inst->offset_time),
       &delta_time, dfreq, doffset);
   inst->estimated_offset += delta_time;
-  inst->estimated_frequency -= dfreq;
+  inst->estimated_frequency = (inst->estimated_frequency - dfreq) / (1.0 - dfreq);
 
-  DEBUG_LOG(LOGF_SourceStats, "old_off_time=[%s] new=[%s] old_off=%f new_off=%f old_freq=%.3fppm new_freq=%.3fppm",
-      UTI_TimevalToString(&prev), UTI_TimevalToString(&(inst->offset_time)),
-      prev_offset, inst->estimated_offset,
-      1.0e6*prev_freq, 1.0e6*inst->estimated_frequency);
+  DEBUG_LOG(LOGF_SourceStats, "n=%d m=%d old_off_time=%s new=%s old_off=%f new_off=%f old_freq=%.3f new_freq=%.3f",
+            inst->n_samples, inst->runs_samples,
+            UTI_TimevalToString(&prev), UTI_TimevalToString(&(inst->offset_time)),
+            prev_offset, inst->estimated_offset,
+            1.0e6 * prev_freq, 1.0e6 * inst->estimated_frequency);
 }
 
 /* ================================================== */
@@ -849,14 +851,6 @@ SST_DoSourceReport(SST_Stats inst, RPT_SourceReport *report, struct timeval *now
     report->latest_meas_err = 0;
     report->stratum = 0;
   }
-}
-
-
-/* ================================================== */
-
-SST_Skew_Direction SST_LastSkewChange(SST_Stats inst)
-{
-  return inst->skew_dirn;
 }
 
 /* ================================================== */
